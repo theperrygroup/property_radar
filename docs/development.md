@@ -36,11 +36,11 @@ exactly matches `pyproject.toml` and whose commit is contained in `main`. It
 reruns deterministic repository gates, builds distributions once, and passes
 those exact artifacts to PyPI and the GitHub release.
 
-PyPI publishing uses OpenID Connect trusted publishing. Configure the
-`theperrygroup/property_radar` release workflow in the `pypi` GitHub environment
-and as a trusted publisher for the `property-radar` PyPI project before creating
-the first tag.
+PyPI publishing uses OpenID Connect trusted publishing. The pending publisher
+for `property-radar` is configured for GitHub owner `theperrygroup`, repository
+`property_radar`, workflow `release.yml`, and environment `pypi`. The GitHub
+environment accepts only `v*` tags.
 
-Public release also requires confirmation that publishing and distributing
-this unofficial client is compatible with the account's PropertyRadar
-agreement and intended use.
+Do not create the first tag until PropertyRadar or qualified legal review
+confirms that publishing and distributing this unofficial client is compatible
+with the applicable account agreement and trademark rights.

@@ -17,8 +17,10 @@ An unofficial, typed Python client for the
 ## Status
 
 The `0.1.0` implementation covers all 37 operations in the official API
-`5.1.1.0` contract. Public release remains gated by vendor-use confirmation and
-PyPI Trusted Publisher configuration.
+`5.1.1.0` contract. The PyPI Trusted Publisher is configured. Public release
+remains gated by vendor or qualified legal confirmation that distributing this
+unofficial SDK is compatible with the applicable PropertyRadar agreement and
+trademark rights.
 
 ## Installation
 
