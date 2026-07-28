@@ -1,0 +1,446 @@
+"""Property search, detail, comparable, and history API operations."""
+
+from __future__ import annotations
+
+from collections.abc import Iterator, Sequence
+from typing import Literal, cast
+
+from ..exceptions import InvalidResponseError
+from ..types import Criterion, JSONDict, JSONValue, ResponseEnvelope
+from ._base import BaseResource, encode_path_segment
+
+
+class PropertiesResource(BaseResource):
+    """Access PropertyRadar property resources."""
+
+    def get(
+        self,
+        radar_id: str,
+        *,
+        fields: Sequence[str] | None = None,
+        purchase: bool = False,
+    ) -> ResponseEnvelope:
+        """Return one property in preview or purchased form.
+
+        Args:
+            radar_id: Unique PropertyRadar property identifier.
+            fields: Fields or fieldsets to return. Values are encoded as one
+                comma-delimited ``Fields`` query parameter.
+            purchase: Whether to purchase the returned record. The client must
+                also be configured with ``allow_charges=True``.
+
+        Returns:
+            The PropertyRadar response envelope for the property.
+
+        Raises:
+            ChargeNotAllowedError: If ``purchase`` is true without the
+                client-level charge opt-in.
+        """
+        return self._transport.request(
+            "GET",
+            f"/v1/properties/{encode_path_segment(radar_id)}",
+            params={"Fields": fields, "Purchase": purchase},
+            charge=purchase,
+        )
+
+    def search(
+        self,
+        *,
+        criteria: Sequence[Criterion],
+        fields: Sequence[str] | None = None,
+        limit: int | None = None,
+        sort: str | None = None,
+        start: int | None = None,
+        purchase: bool = False,
+    ) -> ResponseEnvelope:
+        """Search properties with a generic PropertyRadar criteria body.
+
+        Args:
+            criteria: PropertyRadar criteria objects placed under the vendor
+                ``Criteria`` request-body key.
+            fields: Fields or fieldsets to return. Values are encoded as one
+                comma-delimited ``Fields`` query parameter.
+            limit: Maximum records to return for this page.
+            sort: Vendor sort expression.
+            start: Zero-based record offset.
+            purchase: Whether to purchase the returned records. The client
+                must also be configured with ``allow_charges=True``.
+
+        Returns:
+            The PropertyRadar response envelope for the search page.
+
+        Raises:
+            ChargeNotAllowedError: If ``purchase`` is true without the
+                client-level charge opt-in.
+        """
+        body = cast(JSONValue, {"Criteria": list(criteria)})
+        return self._transport.request(
+            "POST",
+            "/v1/properties",
+            params={
+                "Fields": fields,
+                "Limit": limit,
+                "Sort": sort,
+                "Start": start,
+                "Purchase": purchase,
+            },
+            json=body,
+            charge=purchase,
+            retryable=not purchase,
+        )
+
+    def iter_search(
+        self,
+        *,
+        criteria: Sequence[Criterion],
+        fields: Sequence[str] | None = None,
+        page_size: int = 500,
+        max_results: int | None = 500,
+        sort: str | None = None,
+        start: int = 0,
+        purchase: bool = False,
+    ) -> Iterator[JSONDict]:
+        """Yield property search records across deterministic offset pages.
+
+        Iteration stops at ``max_results`` by default, when PropertyRadar
+        reports that all results have been read, or when a page proves the end
+        of an uncounted result set. An error from any page is propagated instead
+        of returning partial success silently.
+
+        Args:
+            criteria: PropertyRadar criteria objects.
+            fields: Fields or fieldsets to return.
+            page_size: Positive page size. Defaults to the vendor's documented
+                maximum page size.
+            max_results: Maximum records yielded across all pages. Defaults to
+                one maximum-size page. Pass ``None`` only for an explicitly
+                unbounded non-purchased iteration.
+            sort: Vendor sort expression.
+            start: Non-negative initial record offset.
+            purchase: Whether every fetched page should be purchased. The
+                client must also be configured with ``allow_charges=True``.
+
+        Yields:
+            Property dictionaries from each response page.
+
+        Raises:
+            ValueError: If pagination bounds are invalid or a purchased
+                iteration is explicitly unbounded.
+            InvalidResponseError: If pagination metadata or records have an
+                unexpected shape.
+            ChargeNotAllowedError: If ``purchase`` is true without the
+                client-level charge opt-in.
+            PropertyRadarError: If any requested page fails.
+        """
+        if page_size <= 0:
+            raise ValueError("page_size must be greater than zero")
+        if max_results is not None and max_results < 0:
+            raise ValueError("max_results must be zero or greater")
+        if start < 0:
+            raise ValueError("start must be zero or greater")
+        if purchase and max_results is None:
+            raise ValueError("purchased iteration requires a finite max_results")
+        if max_results == 0:
+            return
+
+        next_start = start
+        yielded = 0
+        while True:
+            request_limit = (
+                page_size
+                if max_results is None
+                else min(page_size, max_results - yielded)
+            )
+            page = self.search(
+                criteria=criteria,
+                fields=fields,
+                limit=request_limit,
+                sort=sort,
+                start=next_start,
+                purchase=purchase,
+            )
+            results = page.get("results", [])
+            if not isinstance(results, list) or any(
+                not isinstance(item, dict) for item in results
+            ):
+                raise InvalidResponseError(
+                    "PropertyRadar returned invalid property-search results."
+                )
+            result_count = len(results)
+            records = results
+            if max_results is not None:
+                records = records[: max_results - yielded]
+            yield from records
+            yielded += len(records)
+
+            if max_results is not None and yielded >= max_results:
+                return
+            next_start += result_count
+            total_result_count = page.get("totalResultCount")
+            if total_result_count is not None:
+                if (
+                    isinstance(total_result_count, bool)
+                    or not isinstance(total_result_count, int)
+                    or total_result_count < 0
+                ):
+                    raise InvalidResponseError(
+                        "PropertyRadar returned invalid property-search pagination."
+                    )
+                if next_start >= total_result_count:
+                    return
+            if result_count == 0:
+                return
+            if total_result_count is None and result_count < request_limit:
+                return
+
+    def persons(
+        self,
+        radar_id: str,
+        *,
+        fields: Sequence[str] | None = None,
+        purchase: bool = False,
+    ) -> ResponseEnvelope:
+        """Return people associated with a property.
+
+        Args:
+            radar_id: Unique PropertyRadar property identifier.
+            fields: Fields or fieldsets to return as comma-delimited
+                ``Fields``.
+            purchase: Whether to purchase the returned records. The client
+                must also be configured with ``allow_charges=True``.
+
+        Returns:
+            The PropertyRadar response envelope containing people.
+
+        Raises:
+            ChargeNotAllowedError: If ``purchase`` is true without the
+                client-level charge opt-in.
+        """
+        return self._transport.request(
+            "GET",
+            f"/v1/properties/{encode_path_segment(radar_id)}/persons",
+            params={"Fields": fields, "Purchase": purchase},
+            charge=purchase,
+        )
+
+    def evictions(
+        self,
+        radar_id: str,
+        *,
+        fields: Sequence[str] | None = None,
+        limit: int | None = None,
+        start: int | None = None,
+        purchase: bool = False,
+    ) -> ResponseEnvelope:
+        """Return eviction filings associated with a property.
+
+        Args:
+            radar_id: Unique PropertyRadar property identifier.
+            fields: Fields to return as comma-delimited ``Fields``.
+            limit: Maximum eviction records to return.
+            start: Zero-based record offset.
+            purchase: Whether to purchase the returned records. The client
+                must also be configured with ``allow_charges=True``.
+
+        Returns:
+            The PropertyRadar response envelope containing eviction filings.
+
+        Raises:
+            ChargeNotAllowedError: If ``purchase`` is true without the
+                client-level charge opt-in.
+        """
+        return self._transport.request(
+            "GET",
+            f"/v1/properties/{encode_path_segment(radar_id)}/evictions",
+            params={
+                "Fields": fields,
+                "Limit": limit,
+                "Start": start,
+                "Purchase": purchase,
+            },
+            charge=purchase,
+        )
+
+    def comparable_sales(
+        self,
+        radar_id: str,
+        *,
+        fields: Sequence[str] | None = None,
+        limit: int | None = None,
+        p_type: Sequence[str] | None = None,
+        beds: int | None = None,
+        baths: str | None = None,
+        units: int | None = None,
+        sq_ft: int | None = None,
+        lot_size: int | None = None,
+        year_built: str | None = None,
+        transfer_type: Sequence[str] | None = None,
+        purchase: bool = False,
+    ) -> ResponseEnvelope:
+        """Return comparable property sales.
+
+        Args:
+            radar_id: Unique PropertyRadar property identifier.
+            fields: Fields to return as comma-delimited ``Fields``.
+            limit: Maximum comparable records to return.
+            p_type: Property types encoded as comma-delimited ``PType``.
+            beds: Bedroom comparison filter.
+            baths: Vendor bathroom comparison expression.
+            units: Unit-count comparison filter.
+            sq_ft: Square-footage comparison filter.
+            lot_size: Lot-size comparison filter.
+            year_built: Vendor year-built comparison expression.
+            transfer_type: Sale transfer types encoded as comma-delimited
+                ``TransferType``.
+            purchase: Whether to purchase the returned records. The client
+                must also be configured with ``allow_charges=True``.
+
+        Returns:
+            The PropertyRadar response envelope containing comparable sales.
+
+        Raises:
+            ChargeNotAllowedError: If ``purchase`` is true without the
+                client-level charge opt-in.
+        """
+        return self._transport.request(
+            "GET",
+            f"/v1/properties/{encode_path_segment(radar_id)}/comps/sales",
+            params={
+                "Fields": fields,
+                "Purchase": purchase,
+                "Limit": limit,
+                "PType": p_type,
+                "Beds": beds,
+                "Baths": baths,
+                "Units": units,
+                "SqFt": sq_ft,
+                "LotSize": lot_size,
+                "YearBuilt": year_built,
+                "TransferType": transfer_type,
+            },
+            charge=purchase,
+        )
+
+    def comparable_listings(
+        self,
+        radar_id: str,
+        *,
+        fields: Sequence[str] | None = None,
+        limit: int | None = None,
+        p_type: Sequence[str] | None = None,
+        beds: int | None = None,
+        baths: str | None = None,
+        units: int | None = None,
+        sq_ft: int | None = None,
+        lot_size: int | None = None,
+        year_built: str | None = None,
+        listing_type: Sequence[str] | None = None,
+        purchase: bool = False,
+    ) -> ResponseEnvelope:
+        """Return comparable properties currently listed for sale.
+
+        Args:
+            radar_id: Unique PropertyRadar property identifier.
+            fields: Fields to return as comma-delimited ``Fields``.
+            limit: Maximum comparable records to return.
+            p_type: Property types encoded as comma-delimited ``PType``.
+            beds: Bedroom comparison filter.
+            baths: Vendor bathroom comparison expression.
+            units: Unit-count comparison filter.
+            sq_ft: Square-footage comparison filter.
+            lot_size: Lot-size comparison filter.
+            year_built: Vendor year-built comparison expression.
+            listing_type: Listing types encoded as comma-delimited
+                ``ListingType``.
+            purchase: Whether to purchase the returned records. The client
+                must also be configured with ``allow_charges=True``.
+
+        Returns:
+            The PropertyRadar response envelope containing comparable
+            listings.
+
+        Raises:
+            ChargeNotAllowedError: If ``purchase`` is true without the
+                client-level charge opt-in.
+        """
+        return self._transport.request(
+            "GET",
+            f"/v1/properties/{encode_path_segment(radar_id)}/comps/forsale",
+            params={
+                "Fields": fields,
+                "Purchase": purchase,
+                "Limit": limit,
+                "PType": p_type,
+                "Beds": beds,
+                "Baths": baths,
+                "Units": units,
+                "SqFt": sq_ft,
+                "LotSize": lot_size,
+                "YearBuilt": year_built,
+                "ListingType": listing_type,
+            },
+            charge=purchase,
+        )
+
+    def parcels(
+        self,
+        radar_id: str,
+        *,
+        purchase: bool = False,
+    ) -> ResponseEnvelope:
+        """Return parcel records associated with a property.
+
+        Args:
+            radar_id: Unique PropertyRadar property identifier.
+            purchase: Whether to purchase the returned records. The client
+                must also be configured with ``allow_charges=True``.
+
+        Returns:
+            The PropertyRadar response envelope containing parcels.
+
+        Raises:
+            ChargeNotAllowedError: If ``purchase`` is true without the
+                client-level charge opt-in.
+        """
+        return self._transport.request(
+            "GET",
+            f"/v1/properties/{encode_path_segment(radar_id)}/parcels",
+            params={"Purchase": purchase},
+            charge=purchase,
+        )
+
+    def transactions(
+        self,
+        radar_id: str,
+        *,
+        fields: Sequence[str] | None = None,
+        filter_by: Literal["CurrentOwner", "All"] | None = None,
+        purchase: bool = False,
+    ) -> ResponseEnvelope:
+        """Return recorded transactions associated with a property.
+
+        Args:
+            radar_id: Unique PropertyRadar property identifier.
+            fields: Fields to return as comma-delimited ``Fields``.
+            filter_by: Limit results to the current owner or return all
+                transactions. When omitted, PropertyRadar uses ``All``.
+            purchase: Whether to purchase the returned records. The client
+                must also be configured with ``allow_charges=True``.
+
+        Returns:
+            The PropertyRadar response envelope containing transactions.
+
+        Raises:
+            ChargeNotAllowedError: If ``purchase`` is true without the
+                client-level charge opt-in.
+        """
+        return self._transport.request(
+            "GET",
+            f"/v1/properties/{encode_path_segment(radar_id)}/transactions",
+            params={
+                "Fields": fields,
+                "Filter": filter_by,
+                "Purchase": purchase,
+            },
+            charge=purchase,
+        )

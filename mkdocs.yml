@@ -1,0 +1,45 @@
+site_name: Property Radar Python Client
+site_description: Safe, typed Python client for the PropertyRadar API
+site_url: https://theperrygroup.github.io/property_radar/
+repo_url: https://github.com/theperrygroup/property_radar
+repo_name: theperrygroup/property_radar
+exclude_docs: |
+  planning/
+
+theme:
+  name: material
+  features:
+    - navigation.instant
+    - navigation.sections
+    - content.code.copy
+
+nav:
+  - Home: index.md
+  - Getting started: getting-started.md
+  - Authentication: authentication.md
+  - Requests and responses: usage.md
+  - Errors and retries: errors-and-retries.md
+  - Safety and data: safety.md
+  - API:
+      - Overview: api/index.md
+      - Client: api/client.md
+      - Resources: api/resources.md
+      - Exceptions: api/exceptions.md
+      - Types: api/types.md
+  - Development and release: development.md
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src]
+          options:
+            show_source: false

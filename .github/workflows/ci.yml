@@ -1,0 +1,179 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_FROZEN: "1"
+
+jobs:
+  quality:
+    name: Quality
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.9.17"
+          enable-cache: true
+
+      - name: Install locked dependencies
+        run: uv sync --all-extras --locked
+
+      - name: Lint and format-check
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+
+      - name: Type-check
+        run: uv run mypy
+
+      - name: Scan tracked files for secrets
+        run: >-
+          uv run detect-secrets-hook
+          --exclude-files
+          '^src/property_radar/endpoint_manifest\.json$|^docs/planning/'
+          --exclude-secrets
+          '^(synthetic-token|never-show-this-token|one|two|token)$'
+          $(git ls-files)
+
+      - name: Validate configuration syntax
+        run: |
+          uv run python -c "import tomllib; tomllib.load(open('pyproject.toml', 'rb'))"
+          uv run python -c "from pathlib import Path; import yaml; [yaml.safe_load(path.read_text()) for path in Path('.github').rglob('*.yml')]"
+
+  test:
+    name: Python ${{ matrix.python-version }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python-version: "3.10"
+          - os: ubuntu-latest
+            python-version: "3.11"
+          - os: ubuntu-latest
+            python-version: "3.12"
+          - os: ubuntu-latest
+            python-version: "3.13"
+          - os: ubuntu-latest
+            python-version: "3.14"
+          - os: macos-latest
+            python-version: "3.13"
+          - os: windows-latest
+            python-version: "3.13"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.9.17"
+          enable-cache: true
+
+      - name: Install locked dependencies
+        run: uv sync --all-extras --locked
+
+      - name: Run tests
+        run: uv run pytest
+
+  docs:
+    name: Documentation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.9.17"
+          enable-cache: true
+
+      - name: Install locked dependencies
+        run: uv sync --all-extras --locked
+
+      - name: Build strict documentation
+        run: uv run mkdocs build --strict --clean
+
+  build:
+    name: Distribution
+    needs: [quality, test, docs]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.9.17"
+          enable-cache: true
+
+      - name: Install locked dependencies
+        run: uv sync --all-extras --locked
+
+      - name: Build once
+        run: uv build
+
+      - name: Validate metadata
+        run: uv run twine check dist/*
+
+      - name: Verify wheel in a clean environment
+        shell: bash
+        run: |
+          python -m venv "${RUNNER_TEMP}/wheel-smoke"
+          "${RUNNER_TEMP}/wheel-smoke/bin/python" -m pip install dist/*.whl
+          "${RUNNER_TEMP}/wheel-smoke/bin/python" -c "from property_radar import PropertyRadarClient; from property_radar.openapi_check import manifest_operations; assert len(manifest_operations()) == 37; print(PropertyRadarClient)"
+
+      - name: Upload distributions
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: python-distributions
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14

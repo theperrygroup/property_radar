@@ -1,0 +1,45 @@
+# Bytecode and Python caches
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Environments and local configuration
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+
+# Builds and packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Documentation output
+site/
+
+# Editors and operating systems
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Test and tool artifacts
+.tox/
+.nox/
+bandit-report.*
+safety-report.*
+
+# Credentials and downloaded vendor data
+*.pem
+*.key
+credentials.json
+propertyradar-response*.json
