@@ -36,11 +36,11 @@ exactly matches `pyproject.toml` and whose commit is contained in `main`. It
 reruns deterministic repository gates, builds distributions once, and passes
 those exact artifacts to PyPI and the GitHub release.
 
-PyPI publishing uses OpenID Connect trusted publishing. The pending publisher
+PyPI publishing uses OpenID Connect trusted publishing. The trusted publisher
 for `property-radar` is configured for GitHub owner `theperrygroup`, repository
 `property_radar`, workflow `release.yml`, and environment `pypi`. The GitHub
 environment accepts only `v*` tags.
 
-Do not create the first tag until PropertyRadar or qualified legal review
-confirms that publishing and distributing this unofficial client is compatible
-with the applicable account agreement and trademark rights.
+Publication does not make this library affiliated with or endorsed by
+PropertyRadar. Users remain responsible for complying with the PropertyRadar
+agreements and usage restrictions applicable to their accounts and use cases.

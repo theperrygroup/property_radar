@@ -97,8 +97,6 @@ jobs:
 
       - name: Publish with PyPI trusted publishing
         uses: pypa/gh-action-pypi-publish@2834a314042ef964da07689278dd1e9d773e8afd # v1.14.1
-        with:
-          skip-existing: true
 
   github-release:
     name: Create GitHub release

@@ -3,24 +3,21 @@
 [![CI](https://github.com/theperrygroup/property_radar/actions/workflows/ci.yml/badge.svg)](https://github.com/theperrygroup/property_radar/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/property-radar.svg)](https://pypi.org/project/property-radar/)
 [![Python](https://img.shields.io/pypi/pyversions/property-radar.svg)](https://pypi.org/project/property-radar/)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/theperrygroup/property_radar/blob/main/LICENSE)
 
 An unofficial, typed Python client for the
 [PropertyRadar API](https://developers.propertyradar.com/api).
 
-> [!IMPORTANT]
-> PropertyRadar documents its API for end users and restricts how its data may
-> be used or redistributed. This library is not affiliated with or endorsed by
-> PropertyRadar. Review the vendor terms and obtain any needed partner approval
-> before using it in a product for third parties.
+> **Important:** PropertyRadar documents its API for end users and restricts
+> how its data may be used or redistributed. This library is not affiliated
+> with or endorsed by PropertyRadar. Review the vendor terms and obtain any
+> needed partner approval before using it in a product for third parties.
 
 ## Status
 
-The `0.1.0` implementation covers all 37 operations in the official API
-`5.1.1.0` contract. The PyPI Trusted Publisher is configured. Public release
-remains gated by vendor or qualified legal confirmation that distributing this
-unofficial SDK is compatible with the applicable PropertyRadar agreement and
-trademark rights.
+Version `0.1.0` covers all 37 operations in the official API `5.1.1.0`
+contract. Releases are built once and published through the configured PyPI
+Trusted Publisher.
 
 ## Installation
 
@@ -62,8 +59,10 @@ uv build
 uv run twine check dist/*
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) and the
-[implementation planning tree](docs/planning/property-radar-python-client/README.md).
+See
+[CONTRIBUTING.md](https://github.com/theperrygroup/property_radar/blob/main/CONTRIBUTING.md)
+and the
+[development guide](https://theperrygroup.github.io/property_radar/development/).
 
 ## License
 

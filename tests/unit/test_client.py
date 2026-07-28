@@ -4,7 +4,9 @@ from property_radar import PropertyRadarClient
 
 
 def test_client_resources_are_lazy_cached_and_share_transport() -> None:
-    client = PropertyRadarClient(api_key="synthetic-token")
+    client = PropertyRadarClient(
+        api_key="synthetic-token",  # pragma: allowlist secret
+    )
 
     resources = [
         client.accounts,
@@ -44,7 +46,7 @@ def test_injected_http_client_is_not_closed() -> None:
         transport=httpx.MockTransport(lambda _: httpx.Response(200, json={}))
     )
     with PropertyRadarClient(
-        api_key="synthetic-token",
+        api_key="synthetic-token",  # pragma: allowlist secret
         http_client=injected,
     ):
         pass
@@ -53,6 +55,8 @@ def test_injected_http_client_is_not_closed() -> None:
 
 
 def test_client_repr_redacts_token() -> None:
-    client = PropertyRadarClient(api_key="never-show-this-token")
+    client = PropertyRadarClient(
+        api_key="never-show-this-token",  # pragma: allowlist secret
+    )
     assert "never-show-this-token" not in repr(client)
     client.close()

@@ -10,8 +10,8 @@ or persistent operations.
 ## Project State
 
 The `0.1.0` implementation covers all 37 operations in PropertyRadar API
-contract `5.1.1.0`. It is locally verified; public release depends on
-vendor-use confirmation and PyPI Trusted Publisher configuration.
+contract `5.1.1.0`. Releases use a build-once workflow and PyPI Trusted
+Publishing.
 
 ## Vendor Boundary
 

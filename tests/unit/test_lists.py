@@ -22,7 +22,7 @@ def make_client(
 ) -> tuple[PropertyRadarClient, httpx.Client]:
     http_client = httpx.Client(transport=httpx.MockTransport(handler))
     client = PropertyRadarClient(
-        api_key="synthetic-token",
+        api_key="synthetic-token",  # pragma: allowlist secret
         allow_mutations=allow_mutations,
         max_retries=max_retries,
         http_client=http_client,

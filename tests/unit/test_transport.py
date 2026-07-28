@@ -228,7 +228,7 @@ def test_retry_after_zero_is_honored_and_non_finite_is_ignored(
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
     transport = Transport(
-        api_key="synthetic-token",
+        api_key="synthetic-token",  # pragma: allowlist secret
         http_client=client,
         max_retries=1,
         sleeper=sleeps.append,
@@ -251,7 +251,7 @@ def test_safe_network_and_timeout_retries_then_raise() -> None:
 
     network_client = httpx.Client(transport=httpx.MockTransport(network_handler))
     network_transport = Transport(
-        api_key="synthetic-token",
+        api_key="synthetic-token",  # pragma: allowlist secret
         http_client=network_client,
         max_retries=1,
         sleeper=sleeps.append,
@@ -270,7 +270,7 @@ def test_safe_network_and_timeout_retries_then_raise() -> None:
 
     timeout_client = httpx.Client(transport=httpx.MockTransport(timeout_handler))
     timeout_transport = Transport(
-        api_key="synthetic-token",
+        api_key="synthetic-token",  # pragma: allowlist secret
         http_client=timeout_client,
         max_retries=1,
         sleeper=sleeps.append,
@@ -296,7 +296,7 @@ def test_mutation_and_paid_calls_are_not_retried() -> None:
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
     transport = Transport(
-        api_key="synthetic-token",
+        api_key="synthetic-token",  # pragma: allowlist secret
         http_client=client,
         allow_mutations=True,
         allow_charges=True,
@@ -323,7 +323,7 @@ def test_read_like_post_can_be_explicitly_retried() -> None:
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
     transport = Transport(
-        api_key="synthetic-token",
+        api_key="synthetic-token",  # pragma: allowlist secret
         http_client=client,
         max_retries=1,
         sleeper=lambda _: None,
@@ -404,7 +404,10 @@ def test_configuration_errors(monkeypatch: pytest.MonkeyPatch) -> None:
         "https://api.propertyradar.com#fragment",
     ):
         with pytest.raises(ConfigurationError, match="absolute HTTPS URL"):
-            Transport(api_key="token", base_url=invalid_base_url)
+            Transport(
+                api_key="token",  # pragma: allowlist secret
+                base_url=invalid_base_url,
+            )
 
 
 def test_empty_explicit_api_key_never_falls_back_to_environment(
@@ -469,7 +472,10 @@ def test_token_provider_failure_does_not_retain_sensitive_cause() -> None:
 
 
 def test_closed_internal_transport_rejects_requests() -> None:
-    transport = Transport(api_key="synthetic-token", max_retries=0)
+    transport = Transport(
+        api_key="synthetic-token",  # pragma: allowlist secret
+        max_retries=0,
+    )
     transport.close()
     assert transport.is_closed
     with pytest.raises(ConfigurationError, match="client is closed"):
@@ -484,7 +490,9 @@ def test_injected_client_lifecycle_remains_with_caller() -> None:
 
 
 def test_transport_repr_redacts_token() -> None:
-    transport = Transport(api_key="never-show-this-token")
+    transport = Transport(
+        api_key="never-show-this-token",  # pragma: allowlist secret
+    )
     representation = repr(transport)
     assert "never-show-this-token" not in representation
     assert representation == (
