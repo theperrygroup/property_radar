@@ -487,5 +487,8 @@ def test_transport_repr_redacts_token() -> None:
     transport = Transport(api_key="never-show-this-token")
     representation = repr(transport)
     assert "never-show-this-token" not in representation
-    assert "api.propertyradar.com" in representation
+    assert representation == (
+        "Transport(base_url='https://api.propertyradar.com', "
+        "allow_mutations=False, allow_charges=False)"
+    )
     transport.close()
