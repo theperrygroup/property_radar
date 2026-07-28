@@ -25,6 +25,7 @@ dist/
 
 # Documentation output
 site/
+/docs/planning/
 
 # Editors and operating systems
 .DS_Store
