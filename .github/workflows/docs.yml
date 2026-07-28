@@ -28,9 +28,6 @@ concurrency:
   group: pages-${{ github.ref }}
   cancel-in-progress: false
 
-env:
-  UV_FROZEN: "1"
-
 jobs:
   build:
     name: Build documentation
