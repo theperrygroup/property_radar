@@ -21,18 +21,17 @@ client planning set.
 - The canonical active plan outranks the historical roadmap for the current
   implementation sequence.
 
-## Project Baseline
+## Initial Project Baseline
 
 | Surface | Evidence-backed answer |
 | --- | --- |
-| Repository and branch state | Local `main` has no commits. The only pre-existing files are untracked repo-local skills under `.codex/`. No local remote is configured. |
-| GitHub target | `theperrygroup/property_radar` is a public, empty repository with no default branch as of 2026-07-28. |
+| Repository and branch state | The project began with no commits or runtime files. Pre-existing untracked repo-local skills under `.codex/` were preserved. |
+| GitHub target | `theperrygroup/property_radar` began as a public, empty repository with no default branch. |
 | Structural reference | Local `wfrmls` and GitHub `theperrygroup/wfrmls`, current `main` at `d23464a96fdc01bc883d943290186be269caceda`. |
 | Vendor contract | Official OpenAPI 3.1 document at `https://developers.propertyradar.com/_spec/api.yaml`, API version `5.1.1.0`, 29 paths and 37 operations as inspected 2026-07-28. |
-| Current verification commands | None existed at baseline. Phase 0 establishes `uv sync --all-extras`, Ruff, mypy, pytest/coverage, MkDocs strict build, package build, Twine check, and wheel-install smoke verification. |
-| CI, deployment, or live proof path | None existed locally or in the empty GitHub target. The plan adds secretless CI, strict docs deployment, and trusted-publishing release automation. |
-| External systems and approval boundaries | PropertyRadar credentials and live calls, paid `Purchase=1` requests, lists/imports/automations/webhooks mutations, GitHub push/settings, PyPI project/trusted-publisher setup, release tags, and package publication are distinct boundaries. |
-| Important unknowns | PyPI ownership and trusted-publisher configuration are not established; no PropertyRadar test account is in scope; vendor terms and trademark questions are not resolved by this technical plan. |
+| Verification path | None existed initially. Phase 0 established `uv sync --all-extras --locked`, Ruff, mypy, pytest/coverage, strict MkDocs, package build, Twine, and installed-wheel verification. |
+| External systems and approval boundaries | PropertyRadar paid requests and mutations, PyPI publisher setup, release tags, and package publication remain distinct boundaries. |
+| Important unknowns | PyPI publisher ownership is not established; vendor terms and trademark questions are not resolved by this technical plan. |
 
 ## Current Status Snapshot
 
@@ -41,10 +40,10 @@ Snapshot date: `2026-07-28`
 | Lens | Current answer |
 | --- | --- |
 | Planning foundation | Full scaffold created from current repository, WFRMLS, GitHub, PyPI, and official PropertyRadar documentation evidence. |
-| Working-tree or checked-in implementation truth | No runtime implementation existed when this scaffold was created. |
-| Verification or deployed truth | No project-native verification, CI, docs deployment, GitHub revision, or PyPI artifact existed at baseline. |
-| External-service truth | Official documentation was inspected read-only. No PropertyRadar API request, mutation, purchase, or credential use occurred. |
-| Highest-risk remaining surface | Safe handling of billable lookups, personal data, and mutations while maintaining complete endpoint coverage. |
+| Working-tree or checked-in implementation truth | Version `0.1.0` implements all 37 documented operations. Release-source revision `ad7aebd450d2dbe3607a7ec875027e0cae573cfe` is pushed to `main`; only the pre-existing untracked `.codex/` tree remains local. |
+| Verification or deployed truth | Local gates, CI run `30339288539`, CodeQL run `30339288568`, zero-open-alert readback, and the live Pages deployment all pass. |
+| External-service truth | The official 37-operation contract matches the packaged manifest. One authorized non-billable status request authenticated and returned 10 objects without payload disclosure. PyPI is not published. |
+| Highest-risk remaining surface | Public-release suitability plus the PyPI pending Trusted Publisher and irreversible `v0.1.0` publication boundary. |
 
 ## Fastest Reality Check
 

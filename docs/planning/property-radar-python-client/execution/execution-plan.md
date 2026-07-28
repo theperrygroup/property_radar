@@ -16,17 +16,18 @@ Snapshot date: `2026-07-28`
 
 | Evidence level | Current answer | Source and freshness |
 | --- | --- | --- |
-| Planned | Full package-layout and 37-operation implementation plans exist locally | Planning tree, 2026-07-28 |
-| Implemented locally, uncommitted | Full 37-operation client, tests, docs, examples, contract tooling, and automation | Working tree, 2026-07-28 |
-| Checked in | No commits exist | Local Git, 2026-07-28 |
+| Planned | Full package-layout and 37-operation implementation plans are checked in | Planning tree, 2026-07-28 |
+| Implemented | Full 37-operation client, tests, docs, examples, contract tooling, and automation | Release-source revision `ad7aebd450d2dbe3607a7ec875027e0cae573cfe`, 2026-07-28 |
+| Checked in | Local `main`, `origin/main`, remote HEAD, and GitHub branch readback matched the release-source SHA before this planning-only refresh | Local/GitHub readback, 2026-07-28 |
 | Locally verified | Ruff, strict mypy, 155 tests at 99.11% coverage, strict docs, actionlint, 37-operation drift, secret scan, Python 3.10/3.14 tests, artifacts, and clean-wheel smoke pass | Local commands after final code edit, 2026-07-28 |
-| CI verified | No default branch or workflow exists in the empty GitHub target | GitHub readback, 2026-07-28 |
-| Deployed or operationally active | None | No docs deployment or package publication |
+| CI verified | CI `30339288539` and CodeQL `30339288568` succeeded on `ad7aebd`; the current CodeQL analysis has zero results and repository readback has zero open alerts | GitHub Actions/security readback, 2026-07-28 |
+| Deployed or operationally active | Pages deployment `5635871048` succeeded from `e278799`; the HTTPS site returns HTTP 200 and identifies version 0.1.0/37 operations | GitHub Pages and content readback, 2026-07-28 |
 | External-service outcome | Official JSON contract matches 37 operations; one authorized `Layout=menu` account-status GET authenticated and returned a list of 10 without printing data | Vendor readback, 2026-07-28 |
 
 ## 3. Current Blockers
 
-- PyPI project ownership and the exact trusted publisher are not configured.
+- The exact pending Trusted Publisher is not configured in an authenticated
+  PyPI account. Public JSON and Simple endpoints still return 404.
 - Public distribution remains gated by confirmation that it fits the
   PropertyRadar account agreement and intended end-user use.
 
@@ -148,23 +149,59 @@ Snapshot date: `2026-07-28`
 - No key, label, response body, or licensed record was printed or persisted.
 - Result: `P6-004` is externally verified.
 
+### 2026-07-28 - P6-002 Checked-In GitHub Revision
+
+- Repository proof:
+  - initial implementation commit:
+    `f826bf351879add9463106d65bec0de13ee8126f`
+  - workflow lock-mode repair:
+    `e278799bc09de5ebe7e647474e85b8cf5c3c69c5`
+  - final release-source/test assertion revision:
+    `ad7aebd450d2dbe3607a7ec875027e0cae573cfe`
+  - local `main`, `origin/main`, remote HEAD, and GitHub branch API matched that
+    release-source revision; only the preserved untracked `.codex/` tree
+    remained locally.
+- CI proof:
+  - CI run `30339288539` succeeded on `ad7aebd` with quality, strict docs,
+    Python 3.10-3.14 Linux, Python 3.13 macOS/Windows, distribution, Twine, and
+    clean-wheel jobs green.
+  - CodeQL run `30339288568` succeeded on `ad7aebd` with zero current results.
+    The one prior high-severity finding was confined to a substring assertion
+    in a test, changed to exact equality, and marked fixed by the current
+    analysis. Its obsolete disabled-default-setup instance was dismissed as
+    `used in tests`; repository readback then reported zero open alerts.
+- Documentation proof:
+  - documentation run `30338811225` and Pages deployment `5635871048`
+    succeeded from `e278799`.
+  - `https://theperrygroup.github.io/property_radar/` returned HTTP 200 and
+    displayed the Property Radar Python Client documentation, version 0.1.0,
+    contract 5.1.1.0, and all 37 operations.
+- Release-boundary setup:
+  - GitHub environment `pypi` now exists with a custom deployment policy that
+    permits only `v*` tags.
+  - no tag or public version was created.
+- Result: `P6-002` is verified at checked-in, CI, CodeQL, and deployed-docs
+  evidence levels.
+
 ## 5. Current Work Queue
 
-| Task | Status | Why it is still open |
+| Task | Status | Current evidence or blocker |
 | --- | --- | --- |
-| `P0-001` Package bootstrap | `COMPLETE` | Verified locally; still uncommitted |
-| `P1-001` Transport and safety core | `COMPLETE` | Verified locally; still uncommitted |
-| `P2-001` through `P3-002` resource families | `COMPLETE` | 37 wrappers and safety tests pass |
-| `P4-001` docs and contract coverage | `COMPLETE` | 37/37 mapping and strict docs pass |
-| `P5-001` workflows | `COMPLETE` | actionlint and least-privilege review pass locally |
+| `P0-001` Package bootstrap | `COMPLETE` | Verified locally and checked in |
+| `P1-001` Transport and safety core | `COMPLETE` | Verified locally and checked in |
+| `P2-001` through `P3-002` resource families | `COMPLETE` | 37 wrappers and safety tests pass locally and in CI |
+| `P4-001` docs and contract coverage | `COMPLETE` | 37/37 mapping, strict docs, and Pages pass |
+| `P5-001` workflows | `COMPLETE` | CI, CodeQL, Pages, and exact release workflow are operational |
 | `P6-001` full local release proof | `COMPLETE` | Final source/artifact gates pass |
-| `P6-002` GitHub push and CI | `NEXT` | Exact locally verified revision is ready |
-| `P6-003` PyPI/GitHub release | `BLOCKED` | External trusted-publisher/release preconditions absent |
+| `P6-002` GitHub push and CI | `COMPLETE` | Exact source revision has terminal CI/CodeQL and Pages proof |
+| `P6-003` PyPI/GitHub release | `BLOCKED` | Matching PyPI publisher and vendor-use confirmation are absent |
 | `P6-004` live vendor smoke | `COMPLETE` | One authorized non-billable status readback passed |
 
 ## 6. Current Conclusion
 
-The complete repository-local release candidate and bounded live smoke are
-verified. The next slice is committing and pushing the exact tree, enabling
-Pages, and collecting terminal GitHub proof. PyPI publication remains a
-separate external gate and is not implied by local artifacts.
+The repository-local candidate, checked-in GitHub source, CI, CodeQL,
+deployed documentation, and bounded live smoke are verified. No safe
+repository-local slice remains. Public release is blocked until the matching
+PyPI pending Trusted Publisher and the PropertyRadar public-SDK/account-use
+confirmation are authoritatively satisfied; no tag or publication is implied
+by the prepared GitHub environment.

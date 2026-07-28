@@ -162,16 +162,16 @@ Persistent changes require `allow_mutations=True`. Paid results require both
 
 ## 8. Layout Acceptance Checklist
 
-- [ ] Package imports only from an installed `src/` distribution.
-- [ ] One top-level client owns and closes one transport.
-- [ ] Every official resource family has a module and facade property.
-- [ ] Stable response metadata is typed; vendor fields remain forward
+- [x] Package imports only from an installed `src/` distribution.
+- [x] One top-level client owns and closes one transport.
+- [x] Every official resource family has a module and facade property.
+- [x] Stable response metadata is typed; vendor fields remain forward
       compatible.
-- [ ] Mutation and paid-request guards are unit-tested.
-- [ ] No credential or personal-data fixture is tracked or packaged.
-- [ ] Wheel and sdist contain only intended runtime/docs/license artifacts.
-- [ ] CI, docs, and release workflows use least privilege and hard gates.
-- [ ] Root docs state unofficial status, vendor terms boundary, support policy,
+- [x] Mutation and paid-request guards are unit-tested.
+- [x] No credential or personal-data fixture is tracked or packaged.
+- [x] Wheel and sdist contain only intended runtime/docs/license artifacts.
+- [x] CI, docs, and release workflows use least privilege and hard gates.
+- [x] Root docs state unofficial status, vendor terms boundary, support policy,
       and sync-only scope.
 
 ## 9. Deferred Decisions

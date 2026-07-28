@@ -49,12 +49,12 @@ Public acceptance:
 
 | Surface | Current evidence | Confidence or freshness |
 | --- | --- | --- |
-| Property Radar working tree | No runtime files or commits at planning baseline; `.codex/` skills are unrelated untracked inputs to preserve | High, 2026-07-28 |
-| GitHub target | Public and empty, no default branch | High, 2026-07-28 |
+| Property Radar working tree | Version 0.1.0 implementation is checked in; `.codex/` skills remain preserved, unrelated, and untracked | High, 2026-07-28 |
+| GitHub target | Public `main`; release-source revision `ad7aebd450d2dbe3607a7ec875027e0cae573cfe` has terminal CI and CodeQL success | High, 2026-07-28 |
 | WFRMLS reference | Local and remote `main` match `d23464a`; useful facade/resource and release patterns plus documented defects | High, 2026-07-28 |
 | Vendor contract | Official OpenAPI 3.1 version 5.1.1.0; 29 paths, 37 operations, 9 resource tags | High, 2026-07-28 |
-| PyPI distribution | `property-radar` JSON/project endpoint returned 404 | Time-sensitive, 2026-07-28 |
-| Verification path | Must be bootstrapped in Phase 0 | High |
+| PyPI distribution | `property-radar` JSON and Simple endpoints return 404; matching pending Trusted Publisher is not configured | Time-sensitive, 2026-07-28 |
+| Verification path | Local gates plus GitHub CI, CodeQL, Pages, contract drift, artifact, and installed-wheel proof are operational | High |
 | External system | User supplied a local ignored credential and authorized one bounded non-billable account-status smoke; it returned 10 status objects without payload disclosure | High, 2026-07-28 |
 
 ## 3. Sequencing Rules
@@ -82,7 +82,7 @@ Public acceptance:
 | 8 | `P4-001` | Complete docs, examples, endpoint manifest, and drift check | P2-P3 | `COMPLETE` | 37/37 manifest mapping and strict docs build |
 | 9 | `P5-001` | CI, docs deployment, Dependabot, and OIDC release workflows | P0, P4 | `COMPLETE` | Workflow validation and least-privilege review |
 | 10 | `P6-001` | Full local release-candidate verification | P1-P5 | `COMPLETE` | All gates green, clean installed-wheel smoke |
-| 11 | `P6-002` | Commit, push, and monitor exact GitHub revision | P6-001 | `NEXT` | Checked-in revision and terminal GitHub CI readback |
+| 11 | `P6-002` | Commit, push, and monitor exact GitHub revision | P6-001 | `COMPLETE` | Checked-in revision and terminal GitHub CI/CodeQL/Pages readback |
 | 12 | `P6-003` | Configure and publish PyPI/GitHub release | P6-001, P6-002, external setup | `BLOCKED` | Trusted publisher, exact tag, PyPI hashes, GitHub release |
 | 13 | `P6-004` | Optional non-billable live smoke | Licensed credential and explicit authorization | `COMPLETE` | Sanitized authoritative response with zero mutation/charge |
 
@@ -279,17 +279,24 @@ Public acceptance:
 
 ## 5. Current Next Slice
 
-- Task: `P6-002`.
-- Why it is next: all repository-local implementation, review, contract,
-  documentation, workflow, release-artifact, and safe live-smoke gates are
-  complete.
-- Finish condition: only intended files are committed, `main` is pushed to the
-  user-specified repository, Pages is enabled for the workflow, and the exact
-  pushed SHA reaches terminal CI/docs/CodeQL proof.
+- Task: `P6-003`, currently `BLOCKED`.
+- Why it is blocked: all repository-local, GitHub, CI, CodeQL, Pages, artifact,
+  contract, and safe live-smoke work is complete. The GitHub `pypi` environment
+  exists and is limited to `v*` tags, but PyPI still requires a matching pending
+  Trusted Publisher configured through an authenticated account. Public release
+  also remains gated by confirmation that an unofficial public SDK fits the
+  applicable PropertyRadar account agreement and intended end-user use.
+- Finish condition: those two external confirmations are authoritatively
+  satisfied, then the exact CI-green `v0.1.0` tag publishes once through OIDC;
+  PyPI files/hashes and the resulting GitHub Release are read back.
+- Safe work remaining without that unblock: none. Do not create the irreversible
+  tag or attempt a credential-based upload.
 
 ## 6. Known Stop Conditions
 
 - PyPI project/trusted publisher is not configured or authenticated.
+- Public SDK distribution has not been confirmed as compatible with the
+  applicable PropertyRadar account agreement.
 - A release would claim an ambiguous distribution name or version.
 - Any further live check would consume credits, mutate state, expose licensed
   payloads, or exceed the single authorized account-status smoke.

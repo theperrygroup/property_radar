@@ -15,11 +15,12 @@ Snapshot date: `2026-07-28`
 | Secret/personal-data scan | No credential, token, webhook secret, or real payload | `Zero detect-secrets findings; .env ignored; no live payload persisted` |
 | User docs | MkDocs strict build | `Verified locally after final docs edit` |
 | Endpoint contract | 37/37 wrapper mappings and zero drift at snapshot | `Verified against official JSON spec` |
-| CI workflow | Exact GitHub revision reaches terminal success | `Implemented/actionlint clean; push proof pending` |
-| Docs deployment | Exact revision deployed by Pages | `Workflow implemented; Pages enablement/deploy proof pending` |
-| GitHub release | Exact tag/revision and artifact hashes | `Blocked by implementation and release choice` |
-| PyPI name/ownership | Exact `property-radar` project controlled by publisher | `Unclaimed/unknown; 404 at snapshot` |
-| Trusted publisher | Exact owner/repo/workflow/environment tuple configured | `Blocked by external setup` |
+| CI workflow | Exact GitHub revision reaches terminal success | `CI 30339288539 succeeded on release-source SHA ad7aebd across all jobs` |
+| CodeQL | Exact revision analyzed with no unresolved alerts | `Run 30339288568 succeeded on ad7aebd with zero results; repository readback has zero open alerts` |
+| Docs deployment | Exact docs revision deployed by Pages | `Run 30338811225 and deployment 5635871048 succeeded from e278799; live HTTPS readback returns 200` |
+| GitHub release | Exact tag/revision and artifact hashes | `Blocked by upstream PyPI/vendor gates; no tag or release exists` |
+| PyPI name/ownership | Exact `property-radar` project controlled by publisher | `Public JSON/Simple endpoints return 404; availability remains provisional until publisher setup/first release` |
+| Trusted publisher | Exact owner/repo/workflow/environment tuple configured | `GitHub environment exists and permits only v* tags; matching PyPI pending publisher is not configured` |
 | PyPI version | Exact wheel/sdist and hashes visible, non-yanked | `Not published` |
 | Live vendor smoke | Authorized non-billable request with sanitized readback | `Passed: status-label GET, list count 10, no payload disclosure` |
 
@@ -39,7 +40,8 @@ Snapshot date: `2026-07-28`
 
 ## Current Conclusion
 
-The repository is a verified local release candidate. Checked-in GitHub,
-CI/CodeQL, Pages, and public package proof remain distinct pending steps.
-Public publication is also gated by external PyPI configuration and
-vendor/account-agreement confirmation.
+The repository is a verified local and checked-in release candidate with
+terminal CI/CodeQL and live Pages proof. PyPI and GitHub Release remain
+unpublished. Their only remaining path is the configured pending Trusted
+Publisher followed by the exact `v0.1.0` OIDC workflow, after
+vendor/account-agreement suitability is confirmed.

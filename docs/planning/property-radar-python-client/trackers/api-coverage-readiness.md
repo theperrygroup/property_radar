@@ -15,7 +15,8 @@
 
 Coverage means a dedicated public wrapper method, endpoint-manifest mapping,
 request/response/error test, safety classification, and passing focused local
-gates. It does not mean the method was called against a live account.
+gates. The aggregate 37-operation suite also passed in exact-revision CI. It
+does not mean every method was called against a live account.
 
 ## Coverage Matrix
 
@@ -66,6 +67,8 @@ gates. It does not mean the method was called against a live account.
 | Contract operations | 37 |
 | Implemented locally | 37 |
 | Verified locally | 37 |
+| Checked in | 37 |
+| CI verified | 37 |
 | Live verified | 1 |
 
 Live verification covers only the account status-label request and
