@@ -4,7 +4,6 @@ on:
   push:
     tags:
       - "v*"
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -12,7 +11,6 @@ permissions:
 jobs:
   build:
     name: Validate and build
-    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -83,7 +81,6 @@ jobs:
 
   publish:
     name: Publish to PyPI
-    if: github.event_name == 'push'
     needs: build
     runs-on: ubuntu-latest
     environment:
@@ -103,7 +100,6 @@ jobs:
 
   github-release:
     name: Create GitHub release
-    if: github.event_name == 'push'
     needs: publish
     runs-on: ubuntu-latest
     permissions:
@@ -124,98 +120,3 @@ jobs:
             --verify-tag \
             --generate-notes \
             --title "${GITHUB_REF_NAME}"
-
-  recover-publish:
-    name: Recover v0.1.0 PyPI publication
-    if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    environment:
-      name: pypi
-      url: https://pypi.org/p/property-radar
-    permissions:
-      actions: read
-      contents: read
-      id-token: write
-    env:
-      RECOVERY_ARTIFACT_DIGEST: sha256:fe5567258a9f2a9cf6f54d816883d0e4a4913f45548077b7dad12611cdf18a07 # pragma: allowlist secret
-      RECOVERY_ARTIFACT_ID: "8681245512"
-      RECOVERY_RELEASE_SHA: c48bad4336c85c0009109f1bcb8d3871de859b27 # pragma: allowlist secret
-      RECOVERY_RUN_ID: "30341607839"
-      RECOVERY_TAG: v0.1.0
-      SDIST_SHA256: 32ccbe5932f104bf5541b051192b4d2286c62cf8fb97e9fc7c14b86b554e3f2b # pragma: allowlist secret
-      WHEEL_SHA256: 0e58884d31ed2e22b1562a3fb8cf5e0f9795ecb25b4bf9fa866d49a5b476a019 # pragma: allowlist secret
-    steps:
-      - name: Verify immutable recovery source
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "${GITHUB_REF}" = "refs/heads/main"
-          test "$(gh api "repos/${GITHUB_REPOSITORY}/commits/${RECOVERY_TAG}" --jq .sha)" = "${RECOVERY_RELEASE_SHA}"
-          test "$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RECOVERY_RUN_ID}" --jq .head_sha)" = "${RECOVERY_RELEASE_SHA}"
-          test "$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RECOVERY_RUN_ID}" --jq .head_branch)" = "${RECOVERY_TAG}"
-          test "$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RECOVERY_RUN_ID}/jobs" --jq '.jobs[] | select(.name == "Validate and build") | .conclusion')" = "success"
-          test "$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${RECOVERY_ARTIFACT_ID}" --jq .workflow_run.id)" = "${RECOVERY_RUN_ID}"
-          test "$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${RECOVERY_ARTIFACT_ID}" --jq .digest)" = "${RECOVERY_ARTIFACT_DIGEST}"
-          test "$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${RECOVERY_ARTIFACT_ID}" --jq .expired)" = "false"
-
-      - name: Download original immutable release artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          artifact-ids: "8681245512"
-          github-token: ${{ github.token }}
-          run-id: "30341607839"
-          path: dist/
-
-      - name: Verify original distribution hashes
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')" = "2"
-          printf '%s  %s\n' "${WHEEL_SHA256}" "dist/property_radar-0.1.0-py3-none-any.whl" | sha256sum --check
-          printf '%s  %s\n' "${SDIST_SHA256}" "dist/property_radar-0.1.0.tar.gz" | sha256sum --check
-
-      - name: Publish original distributions with PyPI trusted publishing
-        uses: pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247 # v1.14.1
-
-  recover-github-release:
-    name: Recover v0.1.0 GitHub release
-    if: github.event_name == 'workflow_dispatch'
-    needs: recover-publish
-    runs-on: ubuntu-latest
-    permissions:
-      actions: read
-      contents: write
-    env:
-      RECOVERY_ARTIFACT_ID: "8681245512"
-      RECOVERY_RUN_ID: "30341607839"
-      RECOVERY_TAG: v0.1.0
-      SDIST_SHA256: 32ccbe5932f104bf5541b051192b4d2286c62cf8fb97e9fc7c14b86b554e3f2b # pragma: allowlist secret
-      WHEEL_SHA256: 0e58884d31ed2e22b1562a3fb8cf5e0f9795ecb25b4bf9fa866d49a5b476a019 # pragma: allowlist secret
-    steps:
-      - name: Download original immutable release artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          artifact-ids: "8681245512"
-          github-token: ${{ github.token }}
-          run-id: "30341607839"
-          path: dist/
-
-      - name: Verify original distribution hashes
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')" = "2"
-          printf '%s  %s\n' "${WHEEL_SHA256}" "dist/property_radar-0.1.0-py3-none-any.whl" | sha256sum --check
-          printf '%s  %s\n' "${SDIST_SHA256}" "dist/property_radar-0.1.0.tar.gz" | sha256sum --check
-
-      - name: Create release from original distributions
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release create "${RECOVERY_TAG}" dist/* \
-            --repo "${GITHUB_REPOSITORY}" \
-            --verify-tag \
-            --generate-notes \
-            --title "${RECOVERY_TAG}"
