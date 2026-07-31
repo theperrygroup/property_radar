@@ -165,7 +165,26 @@ jobs:
         run: |
           python -m venv "${RUNNER_TEMP}/wheel-smoke"
           "${RUNNER_TEMP}/wheel-smoke/bin/python" -m pip install dist/*.whl
-          "${RUNNER_TEMP}/wheel-smoke/bin/python" -c "from property_radar import PropertyRadarClient; from property_radar.openapi_check import manifest_operations; assert len(manifest_operations()) == 37; print(PropertyRadarClient)"
+          "${RUNNER_TEMP}/wheel-smoke/bin/python" - <<'PY'
+          from property_radar import (
+              TRANSACTION_HISTORY_CONTRACT,
+              PropertyRadarClient,
+              TransactionParty,
+              parse_transaction_history,
+          )
+          from property_radar.openapi_check import manifest_operations
+
+          assert len(manifest_operations()) == 37
+          assert TRANSACTION_HISTORY_CONTRACT["contract_fingerprint"] == (
+              "d750039019a93bbfc0449b6eecdb47ea8f064e18a7dcfcbd01c3ec30c4e057a8"
+          )
+          assert PropertyRadarClient and TransactionParty
+          parsed = parse_transaction_history(
+              {"results": [], "totalCost": "0", "resultCount": 0},
+              purchase_requested=False,
+          )
+          assert parsed.billing_status == "preview"
+          PY
 
       - name: Upload distributions
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

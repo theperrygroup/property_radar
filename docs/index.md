@@ -3,15 +3,17 @@
 `property-radar` is an unofficial, synchronous Python client for the official
 PropertyRadar API.
 
-The first release targets API contract `5.1.1.0` and emphasizes explicit
+The client targets API contract `5.2.0.0` and emphasizes explicit
 authentication, typed interfaces, secretless tests, and deny-by-default paid
 or persistent operations.
 
 ## Project State
 
-The `0.1.0` implementation covers all 37 operations in PropertyRadar API
-contract `5.1.1.0`. Releases use a build-once workflow and PyPI Trusted
-Publishing.
+The `0.2.0` implementation covers all 37 operations in PropertyRadar API
+contract `5.2.0.0` and exposes an immutable, fingerprinted transaction-history
+contract, typed party/current-owner composition, and typed billing evidence.
+Raw `0.1.0` resource return types remain compatible. Releases use a build-once
+workflow and PyPI Trusted Publishing.
 
 ## Vendor Boundary
 

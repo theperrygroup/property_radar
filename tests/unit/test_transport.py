@@ -70,7 +70,7 @@ def test_success_request_headers_and_query_encoding() -> None:
     request = captured[0]
     assert request.headers["Authorization"] == "Bearer synthetic-token"
     assert request.headers["Accept"] == "application/json"
-    assert request.headers["User-Agent"] == "property-radar-python/0.1.0"
+    assert request.headers["User-Agent"] == "property-radar-python/0.2.0"
     assert request.url.params.multi_items() == [
         ("Fields", "RadarID,APN"),
         ("Dates", "Today"),
@@ -131,7 +131,7 @@ def test_http_error_mapping(
         lambda _: httpx.Response(
             status_code,
             json={
-                "eventid": "synthetic-event",
+                "eventid": "synthetic-123-event",
                 "message": "body must remain private",
             },
             headers={"Retry-After": "2.5"},
@@ -143,7 +143,7 @@ def test_http_error_mapping(
 
     error = captured.value
     assert error.status_code == status_code
-    assert error.request_id == "synthetic-event"
+    assert error.request_id == "synthetic-123-event"
     assert error.retry_after == 2.5
     assert "body must remain private" not in str(error)
     client.close()
@@ -153,17 +153,44 @@ def test_request_id_header_wins_and_invalid_retry_after_is_ignored() -> None:
     transport, client = make_transport(
         lambda _: httpx.Response(
             400,
-            json={"eventid": "body-id"},
+            json={"eventid": "body-123-id"},
             headers={
-                "X-Radar-Request-Id": "header-id",
+                "X-Radar-Request-Id": "header-123-id",
                 "Retry-After": "not-a-date",
             },
         )
     )
     with pytest.raises(BadRequestError) as captured:
         transport.request("GET", "/v1/example")
-    assert captured.value.request_id == "header-id"
+    assert captured.value.request_id == "header-123-id"
     assert captured.value.retry_after is None
+    client.close()
+
+
+def test_request_identifiers_discard_arbitrary_private_text() -> None:
+    transport, client = make_transport(
+        lambda _: httpx.Response(
+            400,
+            json={"eventid": "safe-123-body"},
+            headers={"X-Radar-Request-Id": "PRIVATE PERSON NAME"},
+        )
+    )
+    with pytest.raises(BadRequestError) as captured:
+        transport.request("GET", "/v1/example")
+    assert captured.value.request_id == "safe-123-body"
+    assert "PRIVATE PERSON NAME" not in repr(captured.value)
+    client.close()
+
+    transport, client = make_transport(
+        lambda _: httpx.Response(
+            400,
+            json={"eventid": "PRIVATE ADDRESS VALUE"},
+        )
+    )
+    with pytest.raises(BadRequestError) as captured:
+        transport.request("GET", "/v1/example")
+    assert captured.value.request_id is None
+    assert "PRIVATE ADDRESS VALUE" not in repr(captured.value)
     client.close()
 
 

@@ -1,4 +1,5 @@
 import json
+from hashlib import sha256
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,7 @@ from property_radar.openapi_check import (
     main,
     manifest_operations,
     openapi_operations,
+    source_metadata_mismatches,
 )
 
 
@@ -48,6 +50,25 @@ def test_compare_operations_reports_additions_and_removals() -> None:
         {("GET", "/new")},
         {("GET", "/old")},
     )
+
+
+def test_source_metadata_comparison_catches_field_only_contract_drift() -> None:
+    raw = b'{"openapi":"3.1.0","info":{"version":"5.2.0.0"},"paths":{}}'
+    manifest = {
+        "openapi_version": "3.1.0",
+        "api_version": "5.2.0.0",
+        "source_sha256": sha256(raw).hexdigest(),
+    }
+    document = json.loads(raw)
+
+    assert source_metadata_mismatches(manifest, document, raw) == ()
+    changed = raw.replace(b'"paths":{}', b'"paths":{"/new":{}}')
+    assert source_metadata_mismatches(manifest, document, changed) == ("source_sha256",)
+    assert source_metadata_mismatches(
+        {**manifest, "openapi_version": "3.0.0", "api_version": "5.1.1.0"},
+        document,
+        raw,
+    ) == ("openapi_version", "api_version")
 
 
 def test_load_openapi_from_file_and_main_success(tmp_path: Path) -> None:

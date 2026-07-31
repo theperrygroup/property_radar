@@ -6,7 +6,11 @@ from collections.abc import Callable
 import httpx
 import pytest
 
-from property_radar import PropertyRadarClient
+from property_radar import (
+    PROPERTY_PERSON_IDENTITY_FIELDS,
+    TRANSACTION_HISTORY_FIELDS,
+    PropertyRadarClient,
+)
 from property_radar.exceptions import (
     BadRequestError,
     ChargeNotAllowedError,
@@ -227,6 +231,83 @@ def test_parcels_and_transactions_requests() -> None:
     ]
 
 
+def test_typed_transaction_history_is_additive_and_requests_exact_fields() -> None:
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "Grantor": "SYNTHETIC SELLER GROUP",
+                        "Grantee": "SYNTHETIC BUYER GROUP",
+                    }
+                ],
+                "totalCost": "0.25",
+                "quantityFreeRemaining": 100,
+                "resultCount": 1,
+            },
+        )
+
+    client, http_client = make_client(handler)
+    history = client.properties.transaction_history(
+        "P-SYNTHETIC",
+        filter_by="CurrentOwner",
+    )
+
+    assert history.billing_status == "preview"
+    assert history.records[0].grantee_display == "SYNTHETIC BUYER GROUP"
+    assert len(captured) == 1
+    assert captured[0].url.params.multi_items() == [
+        ("Fields", ",".join(TRANSACTION_HISTORY_FIELDS)),
+        ("Filter", "CurrentOwner"),
+        ("Purchase", "0"),
+    ]
+    http_client.close()
+
+
+def test_typed_transaction_history_composes_prefetched_property_persons() -> None:
+    persons = {
+        "results": [
+            {
+                "RadarID": "P-SYNTHETIC",
+                "PersonKey": "p-synthetic",
+                "PersonType": "Person",
+                "FirstName": "Synthetic",
+                "LastName": "Purchaser",
+            }
+        ],
+        "totalCost": "0.25",
+        "quantityFreeRemaining": 100,
+        "resultCount": 1,
+    }
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "results": [{"Grantee": "SYNTHETIC PURCHASER GROUP"}],
+                "totalCost": "0.25",
+                "quantityFreeRemaining": 100,
+                "resultCount": 1,
+            },
+        )
+
+    client, http_client = make_client(handler)
+    history = client.properties.transaction_history(
+        "P-SYNTHETIC",
+        property_persons=persons,
+    )
+
+    assert PROPERTY_PERSON_IDENTITY_FIELDS[0] == "RadarID"
+    assert history.current_owners is not None
+    assert history.current_owners[0].provider_id == "p-synthetic"
+    assert history.records[0].grantees is None
+    http_client.close()
+
+
 PURCHASE_OPERATIONS: list[tuple[str, Operation]] = [
     (
         "get",
@@ -344,6 +425,44 @@ def test_purchased_search_is_not_retryable() -> None:
 
     assert calls == 1
     http_client.close()
+
+
+def test_typed_transaction_purchase_requires_opt_in_and_is_never_retried() -> None:
+    denied_calls = 0
+
+    def denied_handler(_: httpx.Request) -> httpx.Response:
+        nonlocal denied_calls
+        denied_calls += 1
+        return httpx.Response(200, json={})
+
+    denied_client, denied_http_client = make_client(denied_handler, max_retries=2)
+    with pytest.raises(ChargeNotAllowedError):
+        denied_client.properties.transaction_history(
+            "P-SYNTHETIC",
+            purchase=True,
+        )
+    assert denied_calls == 0
+    denied_http_client.close()
+
+    charged_calls = 0
+
+    def charged_handler(_: httpx.Request) -> httpx.Response:
+        nonlocal charged_calls
+        charged_calls += 1
+        return httpx.Response(503, json={"message": "temporary"})
+
+    charged_client, charged_http_client = make_client(
+        charged_handler,
+        allow_charges=True,
+        max_retries=2,
+    )
+    with pytest.raises(ServerError):
+        charged_client.properties.transaction_history(
+            "P-SYNTHETIC",
+            purchase=True,
+        )
+    assert charged_calls == 1
+    charged_http_client.close()
 
 
 def test_iter_search_advances_start_and_stops_on_short_page() -> None:

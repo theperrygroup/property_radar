@@ -15,8 +15,9 @@ An unofficial, typed Python client for the
 
 ## Status
 
-Version `0.1.0` covers all 37 operations in the official API `5.1.1.0`
-contract. Releases are built once and published through the configured PyPI
+Version `0.2.0` covers all 37 operations in official API `5.2.0.0` and adds
+an immutable, fingerprinted transaction-history contract with a strict typed
+parser. Releases are built once and published through the configured PyPI
 Trusted Publisher.
 
 ## Installation
@@ -40,6 +41,20 @@ Preview-capable endpoints send `Purchase=0` by default. Persistent list,
 import, automation, and webhook operations require `allow_mutations=True`.
 Paid requests require both `allow_charges=True` on the client and
 `purchase=True` on the method call.
+
+## Typed Transaction Evidence
+
+`client.properties.transactions()` remains the raw, backward-compatible
+envelope method. Version `0.2.0` adds
+`client.properties.transaction_history()` for immutable records and typed
+billing evidence.
+
+The provider documents transaction `Grantor` and `Grantee` as scalar display
+strings, so the library preserves each whole value and reports party boundaries
+as unknown. Structured current-owner identities can be composed from the
+dedicated property-persons endpoint with
+`PROPERTY_PERSON_IDENTITY_FIELDS`; they remain separate from any unsupported
+person-to-transaction linkage.
 
 ## Authentication
 

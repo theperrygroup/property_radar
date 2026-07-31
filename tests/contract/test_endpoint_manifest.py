@@ -25,14 +25,19 @@ def load_manifest() -> Mapping[str, Any]:
     return payload
 
 
-def test_manifest_has_the_official_5_1_1_operation_set() -> None:
+def test_manifest_has_the_current_official_operation_set_and_source() -> None:
     manifest = load_manifest()
     operations = manifest["operations"]
     assert isinstance(operations, list)
     pairs = {(item["method"], item["path"]) for item in operations}
 
     assert manifest["openapi_version"] == "3.1.0"
-    assert manifest["api_version"] == "5.1.1.0"
+    assert manifest["api_version"] == "5.2.0.0"
+    assert manifest["inspected_at"] == "2026-07-31"
+    assert manifest["source_sha256"] == (
+        # pragma: allowlist nextline secret
+        "f3808349c387cc1190ae41b24fec37962361b8149fde687179c84a72048e6bd4"
+    )
     assert len(operations) == 37
     assert len(pairs) == 37
 
@@ -46,6 +51,9 @@ def test_every_manifest_operation_has_a_public_resource_method() -> None:
         public_method = operation["public_method"]
         resource_class = RESOURCE_CLASSES[resource_name]
         assert callable(getattr(resource_class, public_method))
+        typed_public_method = operation.get("typed_public_method")
+        if typed_public_method is not None:
+            assert callable(getattr(resource_class, typed_public_method))
 
 
 def test_manifest_safety_classification_totals_are_stable() -> None:
