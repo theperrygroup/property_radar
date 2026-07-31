@@ -15,10 +15,10 @@ An unofficial, typed Python client for the
 
 ## Status
 
-Version `0.2.0` covers all 37 operations in official API `5.2.0.0` and adds
-an immutable, fingerprinted transaction-history contract with a strict typed
-parser. Releases are built once and published through the configured PyPI
-Trusted Publisher.
+Version `0.3.0` covers all 37 operations in official API `5.2.0.0`. It adds
+immutable, fingerprinted contracts for strict transaction history and for an
+exact-target Buyer-criterion property/location match. Releases are built once
+and published through the configured PyPI Trusted Publisher.
 
 ## Installation
 
@@ -55,6 +55,20 @@ as unknown. Structured current-owner identities can be composed from the
 dedicated property-persons endpoint with
 `PROPERTY_PERSON_IDENTITY_FIELDS`; they remain separate from any unsupported
 person-to-transaction linkage.
+
+## Typed Buyer-Transfer Location Evidence
+
+`client.properties.buyer_transfer_match()` builds a fixed
+`POST /v1/properties` query with PropertyRadar's documented Buyer Name
+(Grantee) criterion, an exact RadarID, bounded geography/windows, one-result
+limit, and typed property/location fields. Its scope fingerprint binds the
+exact criteria, field catalog, limit, and offset; paid use remains dual opt-in
+and single-attempt, with malformed purchase flags rejected before network I/O.
+
+The result proves only that the provider returned that property for the Buyer
+criterion. It does not expose the matching document, structured grantees, or
+exact/fuzzy name-match semantics, so it cannot by itself confirm a recorded
+grantee or verified purchase.
 
 ## Authentication
 

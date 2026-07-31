@@ -189,6 +189,38 @@ def test_charged_automation_mutation_is_never_retried() -> None:
     http_client.close()
 
 
+@pytest.mark.parametrize("invalid", [1, 0, "false"])
+@pytest.mark.parametrize(
+    "setting",
+    ["is_enabled", "purchase_phone", "purchase_email"],
+)
+def test_automation_boolean_controls_reject_non_booleans_before_network(
+    invalid: object,
+    setting: str,
+) -> None:
+    calls = 0
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json={})
+
+    client, http_client = make_client(
+        handler,
+        allow_mutations=True,
+        allow_charges=True,
+    )
+    kwargs = {setting: invalid}
+    with pytest.raises(ConfigurationError, match=f"{setting} must be a boolean"):
+        client.automations.update(
+            1006,
+            confirm_full_replacement=True,
+            **kwargs,  # type: ignore[arg-type]
+        )
+    assert calls == 0
+    http_client.close()
+
+
 def test_automation_replacement_requires_acknowledgement_and_content() -> None:
     calls = 0
 

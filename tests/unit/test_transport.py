@@ -45,6 +45,83 @@ def make_transport(
     return transport, client
 
 
+@pytest.mark.parametrize("invalid", [1, 0, None, "false"])
+@pytest.mark.parametrize("setting", ["allow_charges", "allow_mutations"])
+def test_safety_opt_ins_require_exact_booleans(
+    invalid: object,
+    setting: str,
+) -> None:
+    if setting == "allow_charges":
+        with pytest.raises(ConfigurationError, match="allow_charges must be a boolean"):
+            Transport(
+                api_key="synthetic-token",  # pragma: allowlist secret
+                allow_charges=invalid,  # type: ignore[arg-type]
+            )
+    else:
+        with pytest.raises(
+            ConfigurationError,
+            match="allow_mutations must be a boolean",
+        ):
+            Transport(
+                api_key="synthetic-token",  # pragma: allowlist secret
+                allow_mutations=invalid,  # type: ignore[arg-type]
+            )
+
+
+@pytest.mark.parametrize("invalid", [1, 0, None, "false"])
+@pytest.mark.parametrize("setting", ["charge", "mutation"])
+def test_request_safety_classification_requires_exact_booleans_before_network(
+    invalid: object,
+    setting: str,
+) -> None:
+    calls = 0
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json={})
+
+    transport, client = make_transport(handler)
+    if setting == "charge":
+        with pytest.raises(ConfigurationError, match="charge must be a boolean"):
+            transport.request(
+                "GET",
+                "/v1/example",
+                charge=invalid,  # type: ignore[arg-type]
+            )
+    else:
+        with pytest.raises(ConfigurationError, match="mutation must be a boolean"):
+            transport.request(
+                "GET",
+                "/v1/example",
+                mutation=invalid,  # type: ignore[arg-type]
+            )
+    assert calls == 0
+    client.close()
+
+
+@pytest.mark.parametrize("invalid", [1, 0, "false"])
+def test_retry_classification_requires_bool_or_none_before_network(
+    invalid: object,
+) -> None:
+    calls = 0
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json={})
+
+    transport, client = make_transport(handler)
+    with pytest.raises(ConfigurationError, match="retryable must be a boolean"):
+        transport.request(
+            "GET",
+            "/v1/example",
+            retryable=invalid,  # type: ignore[arg-type]
+        )
+    assert calls == 0
+    client.close()
+
+
 def test_success_request_headers_and_query_encoding() -> None:
     captured: list[httpx.Request] = []
 
@@ -70,7 +147,7 @@ def test_success_request_headers_and_query_encoding() -> None:
     request = captured[0]
     assert request.headers["Authorization"] == "Bearer synthetic-token"
     assert request.headers["Accept"] == "application/json"
-    assert request.headers["User-Agent"] == "property-radar-python/0.2.0"
+    assert request.headers["User-Agent"] == "property-radar-python/0.3.0"
     assert request.url.params.multi_items() == [
         ("Fields", "RadarID,APN"),
         ("Dates", "Today"),

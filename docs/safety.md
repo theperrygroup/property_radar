@@ -7,6 +7,12 @@ Paid requests require two independent choices:
 1. Construct the client with `allow_charges=True`.
 2. Pass `purchase=True` to the specific method.
 
+`allow_charges` and `allow_mutations` must be exact booleans. Values such as
+the strings `"true"` or `"false"`, integers, and `None` are rejected during
+client construction rather than interpreted by truthiness. Internal request
+classifications and automation boolean controls enforce the same rule before
+network I/O.
+
 The transport does not automatically retry a paid request after an ambiguous
 network failure because PropertyRadar does not document idempotency keys.
 
@@ -14,7 +20,13 @@ For transaction history, call `transaction_history(purchase=False)` first. A
 valid preview does not authorize a later purchase. A purchased call still
 requires client-level `allow_charges=True`, is never retried automatically,
 and fails closed if required result-count or cost evidence is unavailable or
-if preview-only free-quantity metadata appears in the charged response.
+if preview-only free-quantity metadata appears in the charged response. The
+purchase flag must be exactly boolean and is validated before network I/O.
+
+`buyer_transfer_match()` uses the same dual opt-in and no-paid-retry rules. It
+adds an exact RadarID criterion and a one-result limit, but a preview remains
+only cost/request evidence and never authorizes a purchase automatically. Its
+purchase flag must be exactly boolean or the method fails before network I/O.
 
 The provider does not return the request's `Purchase` choice. Detached raw
 responses therefore parse to unknown billing status unless the caller supplies
@@ -46,6 +58,12 @@ The library does not log response bodies or persist API data. Tests and examples
 use synthetic values. Typed transaction, party, record, and billing
 representations report only shape and availability metadata; they omit names,
 addresses, document/person identifiers, and licensed record values.
+
+Typed buyer-transfer representations likewise omit buyer names, property IDs,
+addresses, parcels, and scope fingerprints from `repr`. The linkage states
+only that a property was returned for the provider's Buyer criterion. The
+matching transaction, structured grantees, and exact/fuzzy name semantics are
+unavailable and must not be inferred.
 
 Transaction `Grantor` and `Grantee` values are opaque group displays. The
 library never splits them into people or organizations. Optional property-person

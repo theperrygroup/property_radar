@@ -5,6 +5,13 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping, Sequence
 from typing import Literal, cast
 
+from ..buyer_transfer import (
+    BUYER_TRANSFER_PROPERTY_FIELDS,
+    BuyerTransferMatchCriteria,
+    BuyerTransferMatchResult,
+    build_buyer_transfer_match_criteria,
+    parse_buyer_transfer_match,
+)
 from ..exceptions import InvalidResponseError
 from ..transaction_history import (
     TRANSACTION_HISTORY_FIELDS,
@@ -480,11 +487,15 @@ class PropertiesResource(BaseResource):
             Immutable typed transaction history and billing evidence.
 
         Raises:
+            TypeError: If ``purchase`` is not exactly a boolean. This is
+                rejected before any network request.
             ChargeNotAllowedError: If ``purchase`` is true without the
                 client-level charge opt-in.
             InvalidResponseError: If the provider response or optional
                 composition violates the bound public contract.
         """
+        if type(purchase) is not bool:
+            raise TypeError("purchase must be a boolean")
         envelope = self.transactions(
             radar_id,
             fields=TRANSACTION_HISTORY_FIELDS,
@@ -496,4 +507,49 @@ class PropertiesResource(BaseResource):
             purchase_requested=purchase,
             property_persons=property_persons,
             radar_id=radar_id,
+        )
+
+    def buyer_transfer_match(
+        self,
+        *,
+        criteria: BuyerTransferMatchCriteria,
+        purchase: bool = False,
+    ) -> BuyerTransferMatchResult:
+        """Return one typed Buyer-criterion linkage to an exact property.
+
+        The method builds the bounded public criteria, requests only the
+        immutable property identity/location field catalog, limits the search
+        to one exact RadarID, and strictly parses the response. A returned
+        linkage means that PropertyRadar matched the documented Buyer Name
+        (Grantee) criterion; it does not invent exact-name semantics or parse
+        scalar transaction-party displays.
+
+        Args:
+            criteria: Exact buyer, property, geography, and transfer windows.
+            purchase: Whether to purchase the returned property record. The
+                client must also be configured with ``allow_charges=True``.
+
+        Returns:
+            Immutable linkage, property location, and billing evidence.
+
+        Raises:
+            TypeError: If ``purchase`` is not exactly a boolean. This is
+                rejected before any network request.
+            ChargeNotAllowedError: If ``purchase`` is true without the
+                client-level charge opt-in.
+            InvalidResponseError: If the response violates the public contract.
+        """
+        if type(purchase) is not bool:
+            raise TypeError("purchase must be a boolean")
+        envelope = self.search(
+            criteria=build_buyer_transfer_match_criteria(criteria),
+            fields=BUYER_TRANSFER_PROPERTY_FIELDS,
+            limit=1,
+            start=0,
+            purchase=purchase,
+        )
+        return parse_buyer_transfer_match(
+            envelope,
+            criteria=criteria,
+            purchase_requested=purchase,
         )

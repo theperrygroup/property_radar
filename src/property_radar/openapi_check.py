@@ -67,7 +67,7 @@ def _load_openapi_bytes(
         raise ValueError("The remote OpenAPI URL must use HTTPS.")
     request = urllib.request.Request(
         spec_url,
-        headers={"User-Agent": "property-radar-openapi-check/0.2.0"},
+        headers={"User-Agent": "property-radar-openapi-check/0.3.0"},
     )
     with urllib.request.urlopen(
         request,

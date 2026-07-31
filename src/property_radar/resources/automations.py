@@ -92,6 +92,13 @@ class AutomationsResource(BaseResource):
             raise ConfigurationError(
                 "Automation updates require explicit full-replacement confirmation."
             )
+        for field_name, value in (
+            ("is_enabled", is_enabled),
+            ("purchase_phone", purchase_phone),
+            ("purchase_email", purchase_email),
+        ):
+            if value is not None and type(value) is not bool:
+                raise ConfigurationError(f"{field_name} must be a boolean or None.")
         body: dict[str, JSONValue] = {}
         if is_enabled is not None:
             body["isEnabled"] = int(is_enabled)

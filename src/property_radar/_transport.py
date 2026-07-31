@@ -75,6 +75,10 @@ class Transport:
             raise ConfigurationError(
                 "Provide either api_key or token_provider, not both."
             )
+        if type(allow_mutations) is not bool:
+            raise ConfigurationError("allow_mutations must be a boolean.")
+        if type(allow_charges) is not bool:
+            raise ConfigurationError("allow_charges must be a boolean.")
         if max_retries < 0:
             raise ConfigurationError("max_retries must be zero or greater.")
         clean_base_url = _validated_base_url(base_url)
@@ -152,10 +156,18 @@ class Transport:
             Parsed PropertyRadar response envelope.
 
         Raises:
+            ConfigurationError: If a safety-classification flag is not an
+                exact boolean.
             MutationNotAllowedError: If a mutation was not enabled.
             ChargeNotAllowedError: If a paid request was not enabled.
             PropertyRadarError: For transport, response, or API failures.
         """
+        if type(mutation) is not bool:
+            raise ConfigurationError("mutation must be a boolean.")
+        if type(charge) is not bool:
+            raise ConfigurationError("charge must be a boolean.")
+        if retryable is not None and type(retryable) is not bool:
+            raise ConfigurationError("retryable must be a boolean or None.")
         if mutation and not self._allow_mutations:
             raise MutationNotAllowedError(
                 "Persistent PropertyRadar mutations are disabled."
@@ -224,7 +236,7 @@ class Transport:
         return {
             "Accept": "application/json",
             "Authorization": f"Bearer {token}",
-            "User-Agent": "property-radar-python/0.2.0",
+            "User-Agent": "property-radar-python/0.3.0",
         }
 
 

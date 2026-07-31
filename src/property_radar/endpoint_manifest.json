@@ -9,7 +9,7 @@
     {"method": "GET", "path": "/v1/accounts/preferences/statuses", "resource": "accounts", "public_method": "status_labels", "mutation": false, "billable": false},
     {"method": "GET", "path": "/v1/documents/{DocumentID}", "resource": "documents", "public_method": "get", "mutation": false, "billable": true},
     {"method": "GET", "path": "/v1/properties/{RadarID}", "resource": "properties", "public_method": "get", "mutation": false, "billable": true},
-    {"method": "POST", "path": "/v1/properties", "resource": "properties", "public_method": "search", "mutation": false, "billable": true},
+    {"method": "POST", "path": "/v1/properties", "resource": "properties", "public_method": "search", "typed_public_method": "buyer_transfer_match", "mutation": false, "billable": true},
     {"method": "GET", "path": "/v1/properties/{RadarID}/persons", "resource": "properties", "public_method": "persons", "mutation": false, "billable": true},
     {"method": "GET", "path": "/v1/properties/{RadarID}/evictions", "resource": "properties", "public_method": "evictions", "mutation": false, "billable": true},
     {"method": "GET", "path": "/v1/properties/{RadarID}/comps/sales", "resource": "properties", "public_method": "comparable_sales", "mutation": false, "billable": true},

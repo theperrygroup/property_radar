@@ -2,6 +2,24 @@
 
 from importlib.metadata import PackageNotFoundError, version
 
+from .buyer_transfer import (
+    BUYER_TRANSFER_MATCH_CONTRACT,
+    BUYER_TRANSFER_PROPERTY_FIELDS,
+    BuyerTransferBillingEvidence,
+    BuyerTransferBillingStatus,
+    BuyerTransferLinkage,
+    BuyerTransferLinkageRelationship,
+    BuyerTransferMatchCriteria,
+    BuyerTransferMatchResult,
+    BuyerTransferProperty,
+    BuyerTransferPropertyField,
+    BuyerTransferPropertyType,
+    BuyerTransferPublicationWindow,
+    BuyerTransferRecordingWindow,
+    build_buyer_transfer_match_criteria,
+    buyer_transfer_scope_fingerprint,
+    parse_buyer_transfer_match,
+)
 from .client import PropertyRadarClient
 from .exceptions import (
     AuthenticationError,
@@ -54,11 +72,24 @@ except PackageNotFoundError:  # pragma: no cover - source tree without an instal
     __version__ = "0+unknown"
 
 __all__ = [
+    "BUYER_TRANSFER_MATCH_CONTRACT",
+    "BUYER_TRANSFER_PROPERTY_FIELDS",
     "PROPERTY_PERSON_IDENTITY_FIELDS",
     "TRANSACTION_HISTORY_CONTRACT",
     "TRANSACTION_HISTORY_FIELDS",
     "AuthenticationError",
     "BadRequestError",
+    "BuyerTransferBillingEvidence",
+    "BuyerTransferBillingStatus",
+    "BuyerTransferLinkage",
+    "BuyerTransferLinkageRelationship",
+    "BuyerTransferMatchCriteria",
+    "BuyerTransferMatchResult",
+    "BuyerTransferProperty",
+    "BuyerTransferPropertyField",
+    "BuyerTransferPropertyType",
+    "BuyerTransferPublicationWindow",
+    "BuyerTransferRecordingWindow",
     "ChargeNotAllowedError",
     "ConfigurationError",
     "ConflictError",
@@ -93,5 +124,8 @@ __all__ = [
     "TransactionPartyKind",
     "ValidationError",
     "__version__",
+    "build_buyer_transfer_match_criteria",
+    "buyer_transfer_scope_fingerprint",
+    "parse_buyer_transfer_match",
     "parse_transaction_history",
 ]

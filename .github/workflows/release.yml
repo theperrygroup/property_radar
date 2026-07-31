@@ -72,8 +72,11 @@ jobs:
           "${RUNNER_TEMP}/wheel-smoke/bin/python" - <<'PY'
           import property_radar
           from property_radar import (
+              BUYER_TRANSFER_MATCH_CONTRACT,
               TRANSACTION_HISTORY_CONTRACT,
+              BuyerTransferMatchCriteria,
               TransactionParty,
+              parse_buyer_transfer_match,
               parse_transaction_history,
           )
           from property_radar.openapi_check import manifest_operations
@@ -82,13 +85,35 @@ jobs:
           assert TRANSACTION_HISTORY_CONTRACT["contract_fingerprint"] == (
               "d750039019a93bbfc0449b6eecdb47ea8f064e18a7dcfcbd01c3ec30c4e057a8"
           )
+          assert BUYER_TRANSFER_MATCH_CONTRACT["contract_fingerprint"] == (
+              "299cfaba5ddfc8337a290352433969f1f1363fa1a545080773761c2c99d2c8be"
+          )
           assert TransactionParty
           parsed = parse_transaction_history(
               {"results": [], "totalCost": "0", "resultCount": 0},
               purchase_requested=False,
           )
           assert parsed.billing_status == "preview"
-          print(property_radar.__version__)
+          criteria = BuyerTransferMatchCriteria(
+              buyer_name="Synthetic Buyer",
+              radar_id="P-SYNTHETIC",
+              state_code="UT",
+              county_fips="49035",
+              publication_window="Last 7 Days",
+          )
+          buyer_match = parse_buyer_transfer_match(
+              {
+                  "results": [{"RadarID": "P-SYNTHETIC"}],
+                  "totalCost": "0",
+                  "quantityFreeRemaining": 100,
+                  "resultCount": 1,
+                  "totalResultCount": 1,
+              },
+              criteria=criteria,
+              purchase_requested=False,
+          )
+          assert buyer_match.matched
+          assert property_radar.__version__ == "0.3.0"
           PY
 
       - name: Upload immutable release artifact

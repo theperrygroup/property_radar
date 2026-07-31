@@ -4,7 +4,7 @@ import property_radar
 
 
 def test_installed_version_uses_package_metadata() -> None:
-    assert property_radar.__version__ == "0.2.0"
+    assert property_radar.__version__ == "0.3.0"
 
 
 def test_typing_marker_is_packaged() -> None:
@@ -28,6 +28,30 @@ def test_transaction_history_public_exports_are_available() -> None:
         "TransactionParty",
         "TransactionPartyKind",
         "parse_transaction_history",
+    }
+
+    assert expected.issubset(property_radar.__all__)
+    assert all(hasattr(property_radar, name) for name in expected)
+
+
+def test_buyer_transfer_public_exports_are_available() -> None:
+    expected = {
+        "BUYER_TRANSFER_MATCH_CONTRACT",
+        "BUYER_TRANSFER_PROPERTY_FIELDS",
+        "BuyerTransferBillingEvidence",
+        "BuyerTransferBillingStatus",
+        "BuyerTransferLinkage",
+        "BuyerTransferLinkageRelationship",
+        "BuyerTransferMatchCriteria",
+        "BuyerTransferMatchResult",
+        "BuyerTransferProperty",
+        "BuyerTransferPropertyField",
+        "BuyerTransferPropertyType",
+        "BuyerTransferPublicationWindow",
+        "BuyerTransferRecordingWindow",
+        "build_buyer_transfer_match_criteria",
+        "buyer_transfer_scope_fingerprint",
+        "parse_buyer_transfer_match",
     }
 
     assert expected.issubset(property_radar.__all__)

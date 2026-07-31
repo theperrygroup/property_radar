@@ -465,6 +465,27 @@ def test_typed_transaction_purchase_requires_opt_in_and_is_never_retried() -> No
     charged_http_client.close()
 
 
+@pytest.mark.parametrize("purchase", [1, 0, None, "true"])
+def test_typed_transaction_rejects_non_boolean_purchase_before_network(
+    purchase: object,
+) -> None:
+    calls = 0
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json={})
+
+    client, http_client = make_client(handler, allow_charges=True)
+    with pytest.raises(TypeError, match="purchase must be a boolean"):
+        client.properties.transaction_history(
+            "P-SYNTHETIC",
+            purchase=purchase,  # type: ignore[arg-type]
+        )
+    assert calls == 0
+    http_client.close()
+
+
 def test_iter_search_advances_start_and_stops_on_short_page() -> None:
     starts: list[int] = []
     requests: list[httpx.Request] = []

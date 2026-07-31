@@ -102,6 +102,54 @@ Currency is currently `None`; the API documents no currency. Parsing a
 detached raw envelope without `purchase_requested=` produces `unknown` rather
 than guessing from cost or free quantity.
 
+### Typed buyer-transfer property match
+
+Use the exact-target convenience when an application already has one previewed
+RadarID and needs typed property/location evidence for the same bounded Buyer
+query:
+
+```python
+from property_radar import BuyerTransferMatchCriteria, PropertyRadarClient
+
+query = BuyerTransferMatchCriteria(
+    buyer_name="Synthetic Buyer",
+    radar_id="P-SYNTHETIC",
+    state_code="UT",
+    county_fips="49035",
+    publication_window="Last 7 Days",
+    recording_window="Last 30 Days",
+)
+
+with PropertyRadarClient() as client:
+    result = client.properties.buyer_transfer_match(
+        criteria=query,
+        purchase=False,
+    )
+```
+
+`BUYER_TRANSFER_MATCH_CONTRACT` binds the official source, documented Buyer
+criterion semantics, fixed criteria/fields, zero-or-one cardinality, parser,
+billing rules, and provider limitations. The per-request scope fingerprint
+binds the exact criteria, field catalog, limit, and offset without retaining a
+separate buyer-name digest.
+
+Set `most_recent_change_of_ownership_only=True` only when the search should be
+limited to the most recent ownership-changing transfer. Despite the provider's
+technical criterion name, PropertyRadar documents that this transfer may be
+either Market or Non-Market.
+
+When present, `result.linkage.property` exposes the exact RadarID, broad
+`PType`, address, city, state, ZIP integer, county, FIPS, APN, and `Decimal`
+coordinates. Missing optional fields stay unavailable and provider strings are
+not trimmed or synthesized. Returned FIPS must identify the requested county.
+
+The linkage relationship is
+`provider_buyer_criterion_property_match`: PropertyRadar returned the property
+for its Buyer Name (Grantee) criterion. The matching transaction/document,
+structured grantees, and exact/fuzzy name-match behavior are unavailable. This
+surface supports geographic attribution and caller review; it cannot alone
+confirm a recorded grantee or verified purchase.
+
 ### Django integration
 
 Keep provider access in a service module and import only public

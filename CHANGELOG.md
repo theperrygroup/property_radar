@@ -8,6 +8,39 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-31
+
+### Added
+
+- Deeply immutable `BUYER_TRANSFER_MATCH_CONTRACT` provenance and strict
+  `parse_buyer_transfer_match` parsing for an exact-target property search
+  using PropertyRadar's documented Buyer Name (Grantee) criterion.
+- `BuyerTransferMatchCriteria`, typed property identity/location and broad
+  property type, redacted linkage, exact scope fingerprint, and billing
+  evidence models.
+- `PropertiesResource.buyer_transfer_match()` as a dual-opt-in, single-request
+  convenience that requests one exact RadarID, rejects non-boolean purchase
+  flags before network I/O, and never retries a paid call.
+
+### Security
+
+- Buyer names, property identifiers, addresses, parcels, and fingerprints are
+  omitted from public representations and bounded error messages.
+- Client charge/mutation opt-ins and both typed property purchase flags reject
+  non-boolean values before any request, so truthy configuration strings and
+  malformed input cannot bypass the safety boundary.
+- Transport request classifications and automation boolean controls now apply
+  the same exact-boolean rule before network I/O.
+
+### Clarified
+
+- A buyer-criterion property match does not expose the matching document,
+  structured grantees, or exact/fuzzy provider name-match semantics. It can
+  support geographic attribution and caller review, but cannot by itself
+  confirm a recorded grantee or verified purchase.
+- The optional most-recent filter means the most recent change of ownership,
+  which PropertyRadar documents may be either Market or Non-Market.
+
 ## [0.2.0] - 2026-07-31
 
 ### Added
@@ -53,6 +86,7 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Python 3.10 through 3.14 CI, CodeQL, GitHub Pages, Dependabot, and
   trusted-publishing release workflows.
 
-[Unreleased]: https://github.com/theperrygroup/property_radar/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/theperrygroup/property_radar/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/theperrygroup/property_radar/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/theperrygroup/property_radar/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/theperrygroup/property_radar/releases/tag/v0.1.0

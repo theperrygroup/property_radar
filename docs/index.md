@@ -9,10 +9,10 @@ or persistent operations.
 
 ## Project State
 
-The `0.2.0` implementation covers all 37 operations in PropertyRadar API
-contract `5.2.0.0` and exposes an immutable, fingerprinted transaction-history
-contract, typed party/current-owner composition, and typed billing evidence.
-Raw `0.1.0` resource return types remain compatible. Releases use a build-once
+The `0.3.0` implementation covers all 37 operations in PropertyRadar API
+contract `5.2.0.0` and exposes immutable, fingerprinted transaction-history
+and Buyer-criterion property/location contracts with typed billing evidence.
+Raw resource return types remain compatible. Releases use a build-once
 workflow and PyPI Trusted Publishing.
 
 ## Vendor Boundary
