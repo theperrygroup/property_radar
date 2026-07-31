@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from typing import Literal, cast
 
 from ..exceptions import InvalidResponseError
+from ..transaction_history import (
+    TRANSACTION_HISTORY_FIELDS,
+    TransactionHistory,
+    parse_transaction_history,
+)
 from ..types import Criterion, JSONDict, JSONValue, ResponseEnvelope
 from ._base import BaseResource, encode_path_segment
 
@@ -443,4 +448,52 @@ class PropertiesResource(BaseResource):
                 "Purchase": purchase,
             },
             charge=purchase,
+        )
+
+    def transaction_history(
+        self,
+        radar_id: str,
+        *,
+        filter_by: Literal["CurrentOwner", "All"] | None = None,
+        purchase: bool = False,
+        property_persons: Mapping[str, object] | None = None,
+    ) -> TransactionHistory:
+        """Return strictly parsed transaction history without changing raw calls.
+
+        The method requests the exact public transaction field catalog and
+        supplies the known purchase flag to the billing parser. For structured
+        current-owner evidence, first call :meth:`persons` with
+        ``PROPERTY_PERSON_IDENTITY_FIELDS`` and pass that raw envelope as
+        ``property_persons``. The parser verifies every returned ``RadarID``
+        and keeps current owners separate from unlinked transaction parties.
+
+        Args:
+            radar_id: Unique PropertyRadar property identifier.
+            filter_by: Limit results to the current owner or return all
+                transactions. When omitted, PropertyRadar uses ``All``.
+            purchase: Whether to purchase the transaction records. The client
+                must also be configured with ``allow_charges=True``.
+            property_persons: Optional raw dedicated property-person response
+                for the same ``radar_id``.
+
+        Returns:
+            Immutable typed transaction history and billing evidence.
+
+        Raises:
+            ChargeNotAllowedError: If ``purchase`` is true without the
+                client-level charge opt-in.
+            InvalidResponseError: If the provider response or optional
+                composition violates the bound public contract.
+        """
+        envelope = self.transactions(
+            radar_id,
+            fields=TRANSACTION_HISTORY_FIELDS,
+            filter_by=filter_by,
+            purchase=purchase,
+        )
+        return parse_transaction_history(
+            envelope,
+            purchase_requested=purchase,
+            property_persons=property_persons,
+            radar_id=radar_id,
         )

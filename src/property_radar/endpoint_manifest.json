@@ -1,9 +1,9 @@
 {
   "source": "https://developers.propertyradar.com/_spec/api.json",
   "openapi_version": "3.1.0",
-  "api_version": "5.1.1.0",
-  "inspected_at": "2026-07-28",
-  "source_sha256": "9adc3d5d9b68630f08cd120b55d9f0c400b55afde9146d536837835a10c73cfc",
+  "api_version": "5.2.0.0",
+  "inspected_at": "2026-07-31",
+  "source_sha256": "f3808349c387cc1190ae41b24fec37962361b8149fde687179c84a72048e6bd4",
   "operations": [
     {"method": "GET", "path": "/v1/accounts/members", "resource": "accounts", "public_method": "members", "mutation": false, "billable": false},
     {"method": "GET", "path": "/v1/accounts/preferences/statuses", "resource": "accounts", "public_method": "status_labels", "mutation": false, "billable": false},
@@ -15,7 +15,7 @@
     {"method": "GET", "path": "/v1/properties/{RadarID}/comps/sales", "resource": "properties", "public_method": "comparable_sales", "mutation": false, "billable": true},
     {"method": "GET", "path": "/v1/properties/{RadarID}/comps/forsale", "resource": "properties", "public_method": "comparable_listings", "mutation": false, "billable": true},
     {"method": "GET", "path": "/v1/properties/{RadarID}/parcels", "resource": "properties", "public_method": "parcels", "mutation": false, "billable": true},
-    {"method": "GET", "path": "/v1/properties/{RadarID}/transactions", "resource": "properties", "public_method": "transactions", "mutation": false, "billable": true},
+    {"method": "GET", "path": "/v1/properties/{RadarID}/transactions", "resource": "properties", "public_method": "transactions", "typed_public_method": "transaction_history", "mutation": false, "billable": true},
     {"method": "GET", "path": "/v1/persons/{PersonKey}/bankruptcies", "resource": "persons", "public_method": "bankruptcies", "mutation": false, "billable": true},
     {"method": "GET", "path": "/v1/persons/{PersonKey}/divorces", "resource": "persons", "public_method": "divorces", "mutation": false, "billable": true},
     {"method": "GET", "path": "/v1/persons/{PersonKey}/liens", "resource": "persons", "public_method": "liens", "mutation": false, "billable": true},

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import os
+import re
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -37,6 +38,8 @@ from .types import JSONValue, ResponseEnvelope
 DEFAULT_BASE_URL = "https://api.propertyradar.com"
 DEFAULT_TIMEOUT = 30.0
 MAX_RETRY_AFTER = 60.0
+MAX_REQUEST_ID_LENGTH = 128
+REQUEST_ID_PATTERN = re.compile(r"[A-Za-z0-9]+-[A-Za-z0-9]+-[A-Za-z0-9]+")
 
 QueryScalar: TypeAlias = str | int | float | bool
 
@@ -221,7 +224,7 @@ class Transport:
         return {
             "Accept": "application/json",
             "Authorization": f"Bearer {token}",
-            "User-Agent": "property-radar-python/0.1.0",
+            "User-Agent": "property-radar-python/0.2.0",
         }
 
 
@@ -304,16 +307,28 @@ def _http_error(response: httpx.Response) -> PropertyRadarHTTPError:
 
 def _request_id(response: httpx.Response) -> str | None:
     header_id = response.headers.get("X-Radar-Request-Id")
-    if header_id:
-        return str(header_id)
+    sanitized_header_id = _sanitize_request_id(header_id)
+    if sanitized_header_id is not None:
+        return sanitized_header_id
     try:
         payload: Any = response.json()
     except ValueError:
         return None
     if isinstance(payload, dict):
         event_id = payload.get("eventid")
-        return event_id if isinstance(event_id, str) else None
+        return _sanitize_request_id(event_id)
     return None
+
+
+def _sanitize_request_id(value: object) -> str | None:
+    """Return a bounded correlation identifier without arbitrary text."""
+    if (
+        type(value) is not str
+        or len(value) > MAX_REQUEST_ID_LENGTH
+        or REQUEST_ID_PATTERN.fullmatch(value) is None
+    ):
+        return None
+    return value
 
 
 def _retry_after_seconds(response: httpx.Response) -> float | None:

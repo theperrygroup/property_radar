@@ -10,6 +10,18 @@ Paid requests require two independent choices:
 The transport does not automatically retry a paid request after an ambiguous
 network failure because PropertyRadar does not document idempotency keys.
 
+For transaction history, call `transaction_history(purchase=False)` first. A
+valid preview does not authorize a later purchase. A purchased call still
+requires client-level `allow_charges=True`, is never retried automatically,
+and fails closed if required result-count or cost evidence is unavailable or
+if preview-only free-quantity metadata appears in the charged response.
+
+The provider does not return the request's `Purchase` choice. Detached raw
+responses therefore parse to unknown billing status unless the caller supplies
+the exact request context. The provider also documents no currency or success
+request identifier, so those values remain `None` rather than defaulting to
+USD or an invented identifier.
+
 ## Persistent Mutations
 
 List, import, automation, and webhook changes require
@@ -31,4 +43,12 @@ responsible for permitted use, access control, consent, suppression, retention,
 deletion, and applicable laws.
 
 The library does not log response bodies or persist API data. Tests and examples
-use synthetic values.
+use synthetic values. Typed transaction, party, record, and billing
+representations report only shape and availability metadata; they omit names,
+addresses, document/person identifiers, and licensed record values.
+
+Transaction `Grantor` and `Grantee` values are opaque group displays. The
+library never splits them into people or organizations. Optional property-person
+composition verifies the same `RadarID`, preserves provider order, and exposes
+current-owner identity evidence separately from any unsupported
+person-to-transaction linkage.
