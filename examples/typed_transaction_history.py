@@ -22,15 +22,10 @@ def main() -> None:
             property_persons=persons,
         )
 
-    print(
-        {
-            "billing_status": history.billing_status,
-            "result_count": history.result_count,
-            "current_owner_count": (
-                None if history.current_owners is None else len(history.current_owners)
-            ),
-        }
-    )
+    if history.purchase_requested is not False:
+        raise RuntimeError("Preview-only transaction request invariant failed.")
+
+    print("Preview transaction evidence parsed successfully.")
 
 
 if __name__ == "__main__":
