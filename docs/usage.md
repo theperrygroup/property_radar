@@ -150,6 +150,65 @@ structured grantees, and exact/fuzzy name-match behavior are unavailable. This
 surface supports geographic attribution and caller review; it cannot alone
 confirm a recorded grantee or verified purchase.
 
+#### Historical recording dates
+
+For a historical query, provide an explicit `BuyerTransferRecordingDateRange`
+and set `publication_window=None`. This selects recording dates without the
+recent publication filter:
+
+```python
+from datetime import date
+
+from property_radar import (
+    BUYER_TRANSFER_HISTORICAL_MATCH_CONTRACT,
+    BuyerTransferMatchCriteria,
+    BuyerTransferRecordingDateRange,
+    PropertyRadarClient,
+)
+
+historical_query = BuyerTransferMatchCriteria(
+    buyer_name="Synthetic Buyer",
+    radar_id="P-SYNTHETIC",
+    state_code="UT",
+    county_fips="49035",
+    publication_window=None,
+    recording_date_range=BuyerTransferRecordingDateRange(
+        start=date(2024, 7, 1),
+        end=date(2024, 7, 31),
+    ),
+)
+
+with PropertyRadarClient() as client:
+    result = client.properties.buyer_transfer_match(
+        criteria=historical_query,
+        purchase=False,
+    )
+
+assert (
+    result.contract_fingerprint
+    == (BUYER_TRANSFER_HISTORICAL_MATCH_CONTRACT["contract_fingerprint"])
+)
+```
+
+`start` and `end` must be exact, finite `datetime.date` values, with
+`start <= end`. Both dates are inclusive, and ranges may span multiple years.
+No provider maximum span is documented; any narrower limit belongs to the
+caller's authorization policy. A historical range cannot be combined with the
+relative `recording_window` or a non-`None` `publication_window`.
+
+`BUYER_TRANSFER_HISTORICAL_MATCH_CONTRACT` version 1 records this separate
+historical contract. Historical scope fingerprints seal the mode, contract
+fingerprint, and exact recording-date range as well as the request criteria,
+fields, limit, and offset. The parser reports the historical contract
+fingerprint for a historical query. The existing recent-query
+`BUYER_TRANSFER_MATCH_CONTRACT` and its fingerprint are unchanged.
+
+A recording date is the document's recording date, not the transaction's
+closing date. Historical results retain the same property-level Buyer
+criterion relationship: they do not identify the matching document, provide
+structured grantees, or automatically verify a purchase. The no-charge controls
+are unchanged; the example explicitly requests `purchase=False`.
+
 ### Django integration
 
 Keep provider access in a service module and import only public

@@ -8,6 +8,7 @@ import math
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import date
 from decimal import Decimal
 from types import MappingProxyType
 from typing import Literal, NoReturn, TypeVar, cast
@@ -275,6 +276,61 @@ BUYER_TRANSFER_MATCH_CONTRACT = _freeze_mapping(
 """Deeply immutable buyer-transfer linkage and parser contract."""
 
 
+_HISTORICAL_CONTRACT_FINGERPRINT_SOURCE: dict[str, object] = {
+    **_CONTRACT_FINGERPRINT_SOURCE,
+    "contract_version": 1,
+    "mode": "historical_recording_range",
+    "criteria_source_inspected_on": "2026-11-03",
+    "criteria_syntax_source": "https://developers.propertyradar.com/criteria",
+    "criterion_order": tuple(
+        name
+        for name in _BUYER_TRANSFER_CRITERION_ORDER
+        if name != "TransferPublishedDate"
+    ),
+    "publication_window_values": (),
+    "recording_window_values": (),
+    "recording_date_range": {
+        "criterion": "TransferRecDate",
+        "boundary_type": "date",
+        "inclusive": True,
+        "minimum_date": date.min.isoformat(),
+        "maximum_date": date.max.isoformat(),
+        "span_limit": "caller_authorization_policy",
+        "format": "from: M/D/YYYY to: M/D/YYYY",
+        "open_ended": False,
+    },
+    "scope_fingerprint_policy": "bind_mode_contract_and_recording_boundaries",
+}
+BUYER_TRANSFER_HISTORICAL_MATCH_CONTRACT = _freeze_mapping(
+    {
+        **_HISTORICAL_CONTRACT_FINGERPRINT_SOURCE,
+        "contract_fingerprint": _fingerprint_payload(
+            _HISTORICAL_CONTRACT_FINGERPRINT_SOURCE
+        ),
+    }
+)
+"""Versioned historical criteria contract using the unchanged response schema."""
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class BuyerTransferRecordingDateRange:
+    """An inclusive finite recording-date range subject to caller authorization."""
+
+    start: date
+    end: date
+
+    def __post_init__(self) -> None:
+        """Reject open, non-date, and reversed ranges."""
+        if type(self.start) is not date or type(self.end) is not date:
+            raise ValueError("recording range boundaries must be exact date objects")
+        if self.start > self.end:
+            raise ValueError("recording range start must not follow end")
+
+    def __repr__(self) -> str:
+        """Describe the range without exposing recording dates."""
+        return f"{type(self).__name__}(bounded=True)"
+
+
 @dataclass(frozen=True, slots=True, repr=False)
 class BuyerTransferMatchCriteria:
     """Bounded criteria for linking one buyer/grantee query to one property."""
@@ -283,9 +339,12 @@ class BuyerTransferMatchCriteria:
     radar_id: str
     state_code: str
     county_fips: str
-    publication_window: BuyerTransferPublicationWindow = _PUBLICATION_WINDOW
+    publication_window: BuyerTransferPublicationWindow | None = _PUBLICATION_WINDOW
     recording_window: BuyerTransferRecordingWindow | None = None
     most_recent_change_of_ownership_only: bool = False
+    recording_date_range: BuyerTransferRecordingDateRange | None = field(
+        default=None, kw_only=True
+    )
 
     def __post_init__(self) -> None:
         """Validate exact caller-normalized criteria and bounded windows."""
@@ -302,10 +361,20 @@ class BuyerTransferMatchCriteria:
             or _COUNTY_FIPS_PATTERN.fullmatch(self.county_fips) is None
         ):
             raise ValueError("county_fips must contain four or five digits")
-        if self.publication_window != _PUBLICATION_WINDOW:
-            raise ValueError("publication_window is not supported by this contract")
-        if self.recording_window not in (None, _RECORDING_WINDOW):
-            raise ValueError("recording_window is not supported by this contract")
+        if self.recording_date_range is None:
+            if self.publication_window != _PUBLICATION_WINDOW:
+                raise ValueError("publication_window is not supported by this contract")
+            if self.recording_window not in (None, _RECORDING_WINDOW):
+                raise ValueError("recording_window is not supported by this contract")
+        else:
+            if type(self.recording_date_range) is not BuyerTransferRecordingDateRange:
+                raise ValueError(
+                    "recording_date_range must be BuyerTransferRecordingDateRange"
+                )
+            if self.publication_window is not None:
+                raise ValueError("historical criteria require publication_window=None")
+            if self.recording_window is not None:
+                raise ValueError("historical criteria require recording_window=None")
         if type(self.most_recent_change_of_ownership_only) is not bool:
             raise ValueError("most_recent_change_of_ownership_only must be a boolean")
 
@@ -318,7 +387,12 @@ class BuyerTransferMatchCriteria:
             f"publication_window={self.publication_window!r}, "
             f"recording_window={self.recording_window!r}, "
             f"most_recent_change_of_ownership_only="
-            f"{self.most_recent_change_of_ownership_only!r})"
+            f"{self.most_recent_change_of_ownership_only!r}"
+            + (
+                ", recording_date_range_available=True)"
+                if self.recording_date_range is not None
+                else ")"
+            )
         )
 
 
@@ -538,9 +612,9 @@ class BuyerTransferMatchResult:
 
     def __post_init__(self) -> None:
         """Bind the linkage and billing evidence to one public contract."""
-        if (
-            self.contract_fingerprint
-            != BUYER_TRANSFER_MATCH_CONTRACT["contract_fingerprint"]
+        if self.contract_fingerprint not in (
+            BUYER_TRANSFER_MATCH_CONTRACT["contract_fingerprint"],
+            BUYER_TRANSFER_HISTORICAL_MATCH_CONTRACT["contract_fingerprint"],
         ):
             raise ValueError("contract_fingerprint does not identify this contract")
         if (
@@ -580,8 +654,23 @@ def build_buyer_transfer_match_criteria(
         {"name": "State", "value": [criteria.state_code]},
         {"name": "County", "value": [int(criteria.county_fips)]},
         {"name": "Buyer", "value": [criteria.buyer_name]},
-        {"name": "TransferPublishedDate", "value": [criteria.publication_window]},
     ]
+    if criteria.recording_date_range is not None:
+        start = criteria.recording_date_range.start
+        end = criteria.recording_date_range.end
+        built.append(
+            {
+                "name": "TransferRecDate",
+                "value": [
+                    f"from: {start.month}/{start.day}/{start.year:04d} "
+                    f"to: {end.month}/{end.day}/{end.year:04d}"
+                ],
+            }
+        )
+    else:
+        built.append(
+            {"name": "TransferPublishedDate", "value": [criteria.publication_window]}
+        )
     if criteria.recording_window is not None:
         built.append({"name": "TransferRecDate", "value": [criteria.recording_window]})
     if criteria.most_recent_change_of_ownership_only:
@@ -595,15 +684,25 @@ def buyer_transfer_scope_fingerprint(
 ) -> str:
     """Return a stable digest of the exact bounded request scope."""
     built = build_buyer_transfer_match_criteria(criteria)
-    return _fingerprint_payload(
-        {
-            "operation": "properties.search",
-            "criteria": list(built),
-            "fields": BUYER_TRANSFER_PROPERTY_FIELDS,
-            "limit": 1,
-            "start": 0,
-        }
-    )
+    scope: dict[str, object] = {
+        "operation": "properties.search",
+        "criteria": list(built),
+        "fields": BUYER_TRANSFER_PROPERTY_FIELDS,
+        "limit": 1,
+        "start": 0,
+    }
+    if criteria.recording_date_range is not None:
+        scope.update(
+            mode="historical_recording_range",
+            contract_fingerprint=(
+                BUYER_TRANSFER_HISTORICAL_MATCH_CONTRACT["contract_fingerprint"]
+            ),
+            recording_date_range={
+                "start": criteria.recording_date_range.start.isoformat(),
+                "end": criteria.recording_date_range.end.isoformat(),
+            },
+        )
+    return _fingerprint_payload(scope)
 
 
 def parse_buyer_transfer_match(
@@ -691,7 +790,12 @@ def parse_buyer_transfer_match(
         billing_status = "preview"
     return BuyerTransferMatchResult(
         contract_fingerprint=cast(
-            str, BUYER_TRANSFER_MATCH_CONTRACT["contract_fingerprint"]
+            str,
+            (
+                BUYER_TRANSFER_HISTORICAL_MATCH_CONTRACT
+                if criteria.recording_date_range is not None
+                else BUYER_TRANSFER_MATCH_CONTRACT
+            )["contract_fingerprint"],
         ),
         scope_fingerprint=scope_fingerprint,
         linkage=linkage,

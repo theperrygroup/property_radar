@@ -3,6 +3,7 @@
 from importlib.metadata import PackageNotFoundError, version
 
 from .buyer_transfer import (
+    BUYER_TRANSFER_HISTORICAL_MATCH_CONTRACT,
     BUYER_TRANSFER_MATCH_CONTRACT,
     BUYER_TRANSFER_PROPERTY_FIELDS,
     BuyerTransferBillingEvidence,
@@ -15,6 +16,7 @@ from .buyer_transfer import (
     BuyerTransferPropertyField,
     BuyerTransferPropertyType,
     BuyerTransferPublicationWindow,
+    BuyerTransferRecordingDateRange,
     BuyerTransferRecordingWindow,
     build_buyer_transfer_match_criteria,
     buyer_transfer_scope_fingerprint,
@@ -72,6 +74,7 @@ except PackageNotFoundError:  # pragma: no cover - source tree without an instal
     __version__ = "0+unknown"
 
 __all__ = [
+    "BUYER_TRANSFER_HISTORICAL_MATCH_CONTRACT",
     "BUYER_TRANSFER_MATCH_CONTRACT",
     "BUYER_TRANSFER_PROPERTY_FIELDS",
     "PROPERTY_PERSON_IDENTITY_FIELDS",
@@ -89,6 +92,7 @@ __all__ = [
     "BuyerTransferPropertyField",
     "BuyerTransferPropertyType",
     "BuyerTransferPublicationWindow",
+    "BuyerTransferRecordingDateRange",
     "BuyerTransferRecordingWindow",
     "ChargeNotAllowedError",
     "ConfigurationError",

@@ -8,6 +8,25 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `BuyerTransferRecordingDateRange(start, end)` for exact, inclusive historical
+  recording dates in `BuyerTransferMatchCriteria` with
+  `publication_window=None`. Ordered, finite date ranges may span multiple
+  years and cannot include a relative `recording_window`; narrower bounds
+  belong to caller authorization policy.
+- `BUYER_TRANSFER_HISTORICAL_MATCH_CONTRACT` version 1 and historical scope
+  fingerprints that seal the mode, contract, and exact date range. Parsed
+  historical results report the historical contract fingerprint; the existing
+  recent-query contract and fingerprint remain unchanged.
+
+### Clarified
+
+- Historical Buyer matches remain property-level evidence without a matching
+  document, structured grantees, or automatic purchase verification. Recording
+  dates are distinct from closing dates, and existing no-charge controls are
+  unchanged.
+
 ## [0.3.0] - 2026-07-31
 
 ### Added
