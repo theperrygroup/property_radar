@@ -105,6 +105,36 @@ purchase claim, and the transport's charge opt-in. A quote is not a price lock,
 and the parser cannot prevent a higher returned cost after a request has
 already been charged. No automatic retries are provided by this module.
 
+## Preserve billing evidence after a rejected response
+
+Contract version **1.1** adds `HistoricalTransactionResponseError`, a subclass of
+`InvalidResponseError`. Both parsers raise this error when response validation
+fails. Its `billing_evidence` is an immutable
+`HistoricalTransactionBillingEvidence` snapshot captured from the same envelope
+before validating rows or count completeness. It contains:
+
+- The caller-known `purchase_requested` mode and `scope_fingerprint`.
+- `total_cost`, `result_count`, and `total_result_count`, each independently
+  validated and nullable. Invalid or absent fields remain `None`.
+- `currency=None`, because the provider does not document currency.
+
+For example, a paid response with `totalCost="1.2500"`, selected count 2, total
+count 8, and only one returned row is rejected. The error still exposes
+`Decimal("1.2500")`, 2, and 8. If the cost is malformed but the counts are valid,
+the error exposes `total_cost=None` and preserves those counts. Conflicting
+counts do not erase an independently valid cost. A response that cannot be
+snapshotted safely exposes unknown metadata rather than fabricating values.
+
+Persist each known billing field even when the paid result is rejected, and
+mark the transaction outcome unknown. The snapshot is not a complete result,
+a provider settlement receipt, or permission to retry. In particular, do not
+replace its known cost with zero or discard it because the rows are incomplete.
+Errors retain no raw envelope, row, or party attributes and have no chained
+exception context. The library raises the error after dropping input locals,
+so its own traceback frames retain no raw response or query. A caller's own
+frames remain the caller's responsibility. Error and snapshot representations
+omit query identifiers, fingerprints, and record values.
+
 ## Preserve record uncertainty
 
 Rows expose immutable `fields` plus typed accessors for document/property IDs,

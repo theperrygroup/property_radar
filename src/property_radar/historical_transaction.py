@@ -84,7 +84,7 @@ def _fingerprint(value: object) -> str:
 
 
 _CONTRACT_SOURCE: dict[str, object] = {
-    "contract_version": "1.0",
+    "contract_version": "1.1",
     "api_version": "5.3.1.0",
     "spec_source": "https://developers.propertyradar.com/_spec/api.json",
     "spec_source_sha256": (
@@ -115,6 +115,7 @@ _CONTRACT_SOURCE: dict[str, object] = {
     "returned_property_id": "must_match_query_when_present",
     "undocumented_envelope_and_record_fields": "reject",
     "request_mode": "explicit_caller_context_not_response_echo",
+    "failure_billing_evidence": "independently_valid_cost_and_counts_before_rows",
     "recording_date_response_schema": "array_RelativeDate_ambiguous",
     "recording_date_scalar": "preserve_legacy_string_unverified",
     "recording_date_array": "preserve_string_tuple_never_convert",
@@ -367,15 +368,7 @@ class _Selection:
                 raise ValueError("counts must be nonnegative integers")
         if self.result_count != min(self.query.limit, self.total_result_count):
             raise ValueError("selected count must equal the bounded total count")
-        if (
-            type(self.total_cost) is not Decimal
-            or not self.total_cost.is_finite()
-            or self.total_cost < 0
-            or self.total_cost.as_tuple().exponent not in range(-63, 64)
-            or len(self.total_cost.as_tuple().digits) > 64
-            or len(format(self.total_cost, "f")) > 64
-            or _COST.fullmatch(format(self.total_cost, "f")) is None
-        ):
+        if not _valid_decimal(self.total_cost):
             raise ValueError("total_cost must be a bounded nonnegative decimal")
         if self.result_count == 0 and self.total_cost != 0:
             raise ValueError("an empty selection cannot have a per-record charge")
@@ -469,12 +462,76 @@ class HistoricalTransactionResult(_Selection):
         return "charged"
 
 
+@dataclass(frozen=True, slots=True, repr=False)
+class HistoricalTransactionBillingEvidence:
+    """Independent billing metadata retained when response validation fails.
+
+    Each nullable field is validated independently. Conflicting counts or
+    incomplete rows cannot erase a valid returned cost. This is evidence from
+    a known request mode, not a complete result or provider account settlement.
+    """
+
+    purchase_requested: bool
+    scope_fingerprint: str
+    total_cost: Decimal | None
+    result_count: int | None
+    total_result_count: int | None
+
+    def __post_init__(self) -> None:
+        """Reject mutable or malformed manually constructed evidence."""
+        if type(self.purchase_requested) is not bool:
+            raise ValueError("purchase_requested must be an exact boolean")
+        if (
+            type(self.scope_fingerprint) is not str
+            or re.fullmatch(r"[0-9a-f]{64}", self.scope_fingerprint) is None
+        ):
+            raise ValueError("scope_fingerprint must be a SHA-256 digest")
+        if self.total_cost is not None and not _valid_decimal(self.total_cost):
+            raise ValueError("total_cost must be a bounded nonnegative decimal or None")
+        for count in (self.result_count, self.total_result_count):
+            if count is not None and (type(count) is not int or count < 0):
+                raise ValueError("counts must be nonnegative integers or None")
+
+    @property
+    def currency(self) -> None:
+        """Return unavailable; no currency is inferred from billing metadata."""
+        return None
+
+    def __repr__(self) -> str:
+        """Expose metadata availability, never scope or source values."""
+        return (
+            f"{type(self).__name__}(purchase_requested={self.purchase_requested}, "
+            f"cost_available={self.total_cost is not None}, "
+            f"selected_count_available={self.result_count is not None}, "
+            f"total_count_available={self.total_result_count is not None})"
+        )
+
+
+class HistoricalTransactionResponseError(InvalidResponseError):
+    """A rejected response with independently valid, privacy-safe billing data."""
+
+    def __init__(
+        self, message: str, *, billing_evidence: HistoricalTransactionBillingEvidence
+    ) -> None:
+        """Attach immutable billing evidence without retaining the response."""
+        super().__init__(message)
+        self.billing_evidence = billing_evidence
+
+
 def parse_historical_transaction_quote(
     envelope: Mapping[str, object], *, query: HistoricalTransactionQuery
 ) -> HistoricalTransactionQuote:
     """Parse a known Purchase=0 response; never infer request mode from a body."""
-    if type(query) is not HistoricalTransactionQuery:
-        raise ValueError("query must be HistoricalTransactionQuery")
+    outcome = _parse_response(envelope, query=query, purchase=False)
+    del envelope, query
+    if isinstance(outcome, (HistoricalTransactionResponseError, ValueError)):
+        raise outcome from None
+    return cast(HistoricalTransactionQuote, outcome)
+
+
+def _parse_quote(
+    envelope: Mapping[str, object], *, query: HistoricalTransactionQuery
+) -> HistoricalTransactionQuote:
     snapshot = _envelope(envelope)
     if "results" in snapshot:
         rows = snapshot["results"]
@@ -505,8 +562,16 @@ def parse_historical_transaction_result(
     An absent/invalid result is never converted to an empty success. A returned
     row's scalar date remains unverified; array dates remain ambiguous.
     """
-    if type(query) is not HistoricalTransactionQuery:
-        raise ValueError("query must be HistoricalTransactionQuery")
+    outcome = _parse_response(envelope, query=query, purchase=True)
+    del envelope, query
+    if isinstance(outcome, (HistoricalTransactionResponseError, ValueError)):
+        raise outcome from None
+    return cast(HistoricalTransactionResult, outcome)
+
+
+def _parse_result(
+    envelope: Mapping[str, object], *, query: HistoricalTransactionQuery
+) -> HistoricalTransactionResult:
     snapshot = _envelope(envelope)
     if "quantityFreeRemaining" in snapshot:
         _invalid("paid_preview_metadata")
@@ -536,6 +601,51 @@ def parse_historical_transaction_result(
     _invalid("paid_selection")
 
 
+def _parse_response(
+    envelope: Mapping[str, object], *, query: HistoricalTransactionQuery, purchase: bool
+) -> (
+    HistoricalTransactionQuote
+    | HistoricalTransactionResult
+    | HistoricalTransactionResponseError
+    | ValueError
+):
+    if type(query) is not HistoricalTransactionQuery:
+        return ValueError("query must be HistoricalTransactionQuery")
+    evidence = _billing_evidence({}, query=query, purchase=purchase)
+    try:
+        # One snapshot supplies both the independent metadata and strict parser.
+        # Validate all keys in the strict parser after preserving known fields.
+        snapshot = _snapshot(envelope, "envelope", validate_keys=False)
+        evidence = _billing_evidence(snapshot, query=query, purchase=purchase)
+        if purchase:
+            return _parse_result(snapshot, query=query)
+        return _parse_quote(snapshot, query=query)
+    except InvalidResponseError as error:
+        message = str(error)
+    # Return unraised, outside the handler. Only the clean public frame raises;
+    # neither the context nor the library traceback then retains source data.
+    return HistoricalTransactionResponseError(message, billing_evidence=evidence)
+
+
+def _billing_evidence(
+    snapshot: Mapping[str, object], *, query: HistoricalTransactionQuery, purchase: bool
+) -> HistoricalTransactionBillingEvidence:
+    known = {key: value for key, value in snapshot.items() if type(key) is str}
+    raw_cost = known.get("totalCost")
+    cost = None
+    if type(raw_cost) is str and len(raw_cost) <= 64 and _COST.fullmatch(raw_cost):
+        cost = Decimal(raw_cost)
+    selected = known.get("resultCount")
+    total = known.get("totalResultCount")
+    return HistoricalTransactionBillingEvidence(
+        purchase_requested=purchase,
+        scope_fingerprint=query.scope_fingerprint,
+        total_cost=cost,
+        result_count=selected if type(selected) is int and selected >= 0 else None,
+        total_result_count=total if type(total) is int and total >= 0 else None,
+    )
+
+
 def _envelope(source: object) -> dict[str, object]:
     snapshot = _snapshot(source, "envelope")
     if not _REQUIRED_FIELDS.issubset(snapshot):
@@ -546,7 +656,11 @@ def _envelope(source: object) -> dict[str, object]:
 
 
 def _snapshot(
-    source: object, kind: str, *, allow_date_tuple: bool = False
+    source: object,
+    kind: str,
+    *,
+    allow_date_tuple: bool = False,
+    validate_keys: bool = True,
 ) -> dict[str, object]:
     if not isinstance(source, Mapping):
         _invalid(f"{kind}_type")
@@ -556,7 +670,7 @@ def _snapshot(
         snapshot = None
     if snapshot is None:
         _invalid(f"{kind}_snapshot")
-    if any(type(key) is not str for key in snapshot):
+    if validate_keys and any(type(key) is not str for key in snapshot):
         _invalid(f"{kind}_key_type")
     if kind == "record":
         recording_date = snapshot.get("RecDate")
@@ -577,6 +691,18 @@ def _cost(value: object) -> Decimal:
     if type(value) is not str or len(value) > 64 or _COST.fullmatch(value) is None:
         _invalid("total_cost")
     return Decimal(value)
+
+
+def _valid_decimal(value: object) -> bool:
+    return (
+        type(value) is Decimal
+        and value.is_finite()
+        and value >= 0
+        and value.as_tuple().exponent in range(-63, 64)
+        and len(value.as_tuple().digits) <= 64
+        and len(format(value, "f")) <= 64
+        and _COST.fullmatch(format(value, "f")) is not None
+    )
 
 
 def _invalid(reason: str) -> NoReturn:

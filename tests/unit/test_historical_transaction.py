@@ -17,11 +17,13 @@ from property_radar.exceptions import InvalidResponseError
 from property_radar.historical_transaction import (
     HISTORICAL_TRANSACTION_CONTRACT,
     HISTORICAL_TRANSACTION_FIELDS,
+    HistoricalTransactionBillingEvidence,
     HistoricalTransactionDateRange,
     HistoricalTransactionField,
     HistoricalTransactionQuery,
     HistoricalTransactionQuote,
     HistoricalTransactionRecord,
+    HistoricalTransactionResponseError,
     HistoricalTransactionResult,
     parse_historical_transaction_quote,
     parse_historical_transaction_result,
@@ -145,7 +147,7 @@ def typed_row(values: Mapping[str, object]) -> HistoricalTransactionRecord:
 def test_contract_has_current_provenance_and_distinct_stable_fingerprint() -> None:
     contract = HISTORICAL_TRANSACTION_CONTRACT
     assert isinstance(contract, MappingProxyType)
-    assert contract["contract_version"] == "1.0"
+    assert contract["contract_version"] == "1.1"
     assert contract["api_version"] == "5.3.1.0"
     assert (
         contract["spec_source"] == "https://developers.propertyradar.com/_spec/api.json"
@@ -755,3 +757,283 @@ def test_legacy_transaction_and_buyer_contracts_are_unchanged() -> None:
     assert legacy.billing.status == "charged"
     with pytest.raises(InvalidResponseError):
         parse_transaction_history(quote_payload(), purchase_requested=False)
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"results": [row()]},
+        {"results": [None, row(DocumentID="D-SYNTHETIC-2")]},
+        {"results": "SYNTHETIC_PRIVATE_ROWS"},
+        {"results": (row(), row(DocumentID="D-SYNTHETIC-2"))},
+        {"results": [row(Grantor=["SYNTHETIC_PRIVATE_PARTY"]), {}]},
+        {"results": [row(RecDate=("Today",)), {}]},
+        {"results": [row(Unknown="SYNTHETIC_PRIVATE_FIELD"), {}]},
+        {"results": [row(), row()]},
+        {"unexpected": "SYNTHETIC_PRIVATE_ENVELOPE"},
+        {"quantityFreeRemaining": 1},
+    ],
+)
+def test_invalid_paid_rows_preserve_independently_valid_billing_metadata(
+    changes: dict[str, object],
+) -> None:
+    request = query()
+    with pytest.raises(HistoricalTransactionResponseError) as caught:
+        parse_historical_transaction_result(paid_payload(**changes), query=request)
+    evidence = caught.value.billing_evidence
+    assert type(evidence) is HistoricalTransactionBillingEvidence
+    assert evidence.purchase_requested is True
+    assert evidence.scope_fingerprint == request.scope_fingerprint
+    assert evidence.total_cost == Decimal("0.0000001")
+    assert evidence.result_count == 2
+    assert evidence.total_result_count == 5
+    assert evidence.currency is None
+
+
+def test_absent_paid_rows_preserve_cost_and_both_counts() -> None:
+    with pytest.raises(HistoricalTransactionResponseError) as caught:
+        parse_historical_transaction_result(quote_payload(), query=query())
+    evidence = caught.value.billing_evidence
+    assert evidence.purchase_requested is True
+    assert evidence.total_cost == Decimal("0.0000001")
+    assert evidence.result_count == 2
+    assert evidence.total_result_count == 5
+
+
+@pytest.mark.parametrize(
+    ("changes", "cost", "selected", "total"),
+    [
+        ({"totalCost": None}, None, 2, 5),
+        ({"totalCost": True}, None, 2, 5),
+        ({"totalCost": "-0.50"}, None, 2, 5),
+        ({"totalCost": "1e-7"}, None, 2, 5),
+        ({"totalCost": "9" * 65}, None, 2, 5),
+        ({"totalCost": StringSubclass("0.25")}, None, 2, 5),
+        ({"resultCount": True}, Decimal("0.0000001"), None, 5),
+        ({"resultCount": -1}, Decimal("0.0000001"), None, 5),
+        ({"resultCount": "2"}, Decimal("0.0000001"), None, 5),
+        ({"resultCount": IntSubclass(2)}, Decimal("0.0000001"), None, 5),
+        ({"totalResultCount": None}, Decimal("0.0000001"), 2, None),
+        ({"totalResultCount": 5.0}, Decimal("0.0000001"), 2, None),
+        (
+            {"totalCost": None, "resultCount": None, "totalResultCount": None},
+            None,
+            None,
+            None,
+        ),
+        ({"resultCount": 3, "totalResultCount": 1}, Decimal("0.0000001"), 3, 1),
+        ({"resultCount": 0, "totalResultCount": 0}, Decimal("0.0000001"), 0, 0),
+    ],
+)
+def test_paid_error_captures_each_billing_field_without_cross_field_inference(
+    changes: dict[str, object],
+    cost: Decimal | None,
+    selected: int | None,
+    total: int | None,
+) -> None:
+    with pytest.raises(HistoricalTransactionResponseError) as caught:
+        parse_historical_transaction_result(paid_payload(**changes), query=query())
+    evidence = caught.value.billing_evidence
+    assert evidence.total_cost == cost
+    assert evidence.result_count == selected
+    assert evidence.total_result_count == total
+    assert evidence.purchase_requested is True
+
+
+@pytest.mark.parametrize("missing", ["totalCost", "resultCount", "totalResultCount"])
+def test_missing_billing_field_does_not_erase_other_paid_metadata(missing: str) -> None:
+    payload = paid_payload()
+    del payload[missing]
+    with pytest.raises(HistoricalTransactionResponseError) as caught:
+        parse_historical_transaction_result(payload, query=query())
+    evidence = caught.value.billing_evidence
+    assert evidence.total_cost == (
+        None if missing == "totalCost" else Decimal("0.0000001")
+    )
+    assert evidence.result_count == (None if missing == "resultCount" else 2)
+    assert evidence.total_result_count == (None if missing == "totalResultCount" else 5)
+
+
+@pytest.mark.parametrize(
+    "payload", [None, "SYNTHETIC_PRIVATE_RESPONSE", (), [], 0, FailingSnapshotMapping()]
+)
+def test_unreadable_paid_envelope_keeps_request_scope_without_invented_metadata(
+    payload: object,
+) -> None:
+    request = query()
+    with pytest.raises(HistoricalTransactionResponseError) as caught:
+        parse_historical_transaction_result(
+            cast(Mapping[str, object], payload), query=request
+        )
+    evidence = caught.value.billing_evidence
+    assert evidence.purchase_requested is True
+    assert evidence.scope_fingerprint == request.scope_fingerprint
+    assert evidence.total_cost is None
+    assert evidence.result_count is None
+    assert evidence.total_result_count is None
+
+
+def test_nonstring_unknown_envelope_key_does_not_erase_paid_metadata() -> None:
+    payload = cast(dict[object, object], paid_payload())
+    payload[10] = "SYNTHETIC_PRIVATE_UNKNOWN_KEY"
+    with pytest.raises(HistoricalTransactionResponseError) as caught:
+        parse_historical_transaction_result(
+            cast(Mapping[str, object], payload), query=query()
+        )
+    assert caught.value.billing_evidence.total_cost == Decimal("0.0000001")
+    assert caught.value.billing_evidence.result_count == 2
+    assert caught.value.billing_evidence.total_result_count == 5
+
+
+def test_malformed_quote_preserves_metadata_without_claiming_purchase() -> None:
+    with pytest.raises(HistoricalTransactionResponseError) as caught:
+        parse_historical_transaction_quote(
+            quote_payload(results=[row()]), query=query()
+        )
+    evidence = caught.value.billing_evidence
+    assert evidence.purchase_requested is False
+    assert evidence.scope_fingerprint == query().scope_fingerprint
+    assert evidence.total_cost == Decimal("0.0000001")
+    assert evidence.result_count == 2
+    assert evidence.total_result_count == 5
+
+
+def test_billing_error_evidence_is_detached_immutable_and_has_no_raw_context() -> None:
+    payload = paid_payload(results=[row(Grantor=["SYNTHETIC_PRIVATE_PARTY"]), {}])
+    with pytest.raises(HistoricalTransactionResponseError) as caught:
+        parse_historical_transaction_result(payload, query=query())
+    error = caught.value
+    evidence = error.billing_evidence
+    payload["totalCost"] = "99"
+    payload["resultCount"] = 100
+    assert evidence.total_cost == Decimal("0.0000001")
+    assert evidence.result_count == 2
+    assert error.__cause__ is None
+    assert error.__context__ is None
+    for representation in (
+        str(error),
+        repr(error),
+        repr(evidence),
+        "".join(traceback.format_exception(error)),
+    ):
+        assert "SYNTHETIC_PRIVATE" not in representation
+        assert "P-SYNTHETIC" not in representation
+        assert "D-SYNTHETIC" not in representation
+    assert not hasattr(evidence, "records")
+    assert not hasattr(evidence, "query")
+    assert not hasattr(evidence, "fields")
+    with pytest.raises(FrozenInstanceError):
+        evidence.total_cost = Decimal("99")  # type: ignore[misc]
+
+
+def test_snapshot_exception_context_does_not_retain_private_provider_values() -> None:
+    with pytest.raises(HistoricalTransactionResponseError) as caught:
+        parse_historical_transaction_result(FailingSnapshotMapping(), query=query())
+    assert caught.value.__context__ is None
+    assert caught.value.__cause__ is None
+    assert "SYNTHETIC_PRIVATE" not in "".join(traceback.format_exception(caught.value))
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"purchase_requested": 1},
+        {"scope_fingerprint": "not-a-digest"},
+        {"scope_fingerprint": StringSubclass("a" * 64)},
+        {"total_cost": 0.25},
+        {"total_cost": Decimal("NaN")},
+        {"total_cost": Decimal("Infinity")},
+        {"total_cost": Decimal("-0.25")},
+        {"total_cost": Decimal("1e-1000000")},
+        {"result_count": True},
+        {"result_count": -1},
+        {"total_result_count": "5"},
+        {"total_result_count": IntSubclass(5)},
+    ],
+)
+def test_direct_billing_evidence_construction_validates_each_public_field(
+    changes: dict[str, object],
+) -> None:
+    evidence = HistoricalTransactionBillingEvidence(
+        purchase_requested=True,
+        scope_fingerprint=query().scope_fingerprint,
+        total_cost=Decimal("0.0000001"),
+        result_count=3,
+        total_result_count=1,
+    )
+    with pytest.raises(ValueError):
+        replace(evidence, **changes)  # type: ignore[arg-type]
+
+
+def test_direct_billing_evidence_is_frozen_and_accepts_independent_unknowns() -> None:
+    evidence = HistoricalTransactionBillingEvidence(
+        purchase_requested=False,
+        scope_fingerprint=query().scope_fingerprint,
+        total_cost=None,
+        result_count=None,
+        total_result_count=None,
+    )
+    assert evidence.total_cost is None
+    assert evidence.result_count is None
+    assert evidence.total_result_count is None
+    assert evidence.currency is None
+    with pytest.raises(FrozenInstanceError):
+        evidence.result_count = 1  # type: ignore[misc]
+
+
+def assert_no_private_source_reference(
+    value: object, private_sources: tuple[object, ...]
+) -> None:
+    assert all(value is not private for private in private_sources)
+    if isinstance(value, str):
+        assert "SYNTHETIC_PRIVATE" not in value
+    elif isinstance(value, Mapping):
+        for key, nested in value.items():
+            assert_no_private_source_reference(key, private_sources)
+            assert_no_private_source_reference(nested, private_sources)
+    elif isinstance(value, (tuple, list)):
+        for nested in value:
+            assert_no_private_source_reference(nested, private_sources)
+    elif isinstance(value, HistoricalTransactionResponseError):
+        assert_no_private_source_reference(value.args, private_sources)
+        assert_no_private_source_reference(vars(value), private_sources)
+    elif isinstance(value, HistoricalTransactionBillingEvidence):
+        assert_no_private_source_reference(value.scope_fingerprint, private_sources)
+        assert_no_private_source_reference(value.total_cost, private_sources)
+        assert_no_private_source_reference(value.result_count, private_sources)
+        assert_no_private_source_reference(value.total_result_count, private_sources)
+
+
+@pytest.mark.parametrize("purchase", [False, True])
+def test_public_parser_error_traceback_does_not_retain_raw_source_frames(
+    purchase: bool,
+) -> None:
+    request = query()
+    private_party = ["SYNTHETIC_PRIVATE_PARTY"]
+    raw_row = row(Grantor=private_party)
+    raw_rows = [raw_row, row(DocumentID="D-SYNTHETIC-2")]
+    payload = paid_payload(results=raw_rows)
+    parser = (
+        parse_historical_transaction_result
+        if purchase
+        else parse_historical_transaction_quote
+    )
+    with pytest.raises(HistoricalTransactionResponseError) as caught:
+        parser(payload, query=request)
+    error = caught.value
+    trace = error.__traceback__
+    library_frame_count = 0
+    while trace is not None:
+        frame = trace.tb_frame
+        if frame.f_globals.get("__name__") == "property_radar.historical_transaction":
+            library_frame_count += 1
+            assert frame.f_code.co_name == parser.__name__
+            assert set(frame.f_locals) == {"outcome"}
+            assert_no_private_source_reference(
+                frame.f_locals,
+                (payload, raw_rows, raw_row, private_party, request),
+            )
+        trace = trace.tb_next
+    assert library_frame_count == 1
+    assert error.__cause__ is None
+    assert error.__context__ is None
