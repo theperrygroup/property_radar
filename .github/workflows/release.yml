@@ -70,13 +70,22 @@ jobs:
           python -m venv "${RUNNER_TEMP}/wheel-smoke"
           "${RUNNER_TEMP}/wheel-smoke/bin/python" -m pip install dist/*.whl
           "${RUNNER_TEMP}/wheel-smoke/bin/python" - <<'PY'
+          from datetime import date
           import property_radar
           from property_radar import (
+              BUYER_TRANSFER_HISTORICAL_MATCH_CONTRACT,
               BUYER_TRANSFER_MATCH_CONTRACT,
               TRANSACTION_HISTORY_CONTRACT,
               BuyerTransferMatchCriteria,
+              BuyerTransferRecordingDateRange,
+              HistoricalTransactionDateRange,
+              HistoricalTransactionQuery,
               TransactionParty,
+              build_buyer_transfer_match_criteria,
               parse_buyer_transfer_match,
+              parse_historical_buyer_transfer_match,
+              parse_historical_transaction_quote,
+              parse_historical_transaction_result,
               parse_transaction_history,
           )
           from property_radar.openapi_check import manifest_operations
@@ -113,7 +122,46 @@ jobs:
               purchase_requested=False,
           )
           assert buyer_match.matched
-          assert property_radar.__version__ == "0.3.0"
+          assert property_radar.__version__ == "0.4.0"
+          historical = BuyerTransferMatchCriteria(
+              buyer_name="Synthetic Buyer", radar_id="P-SYNTHETIC",
+              state_code="UT", county_fips="49035", publication_window=None,
+              recording_date_range=BuyerTransferRecordingDateRange(
+                  start=date(2020, 1, 1), end=date(2025, 12, 31),
+              ),
+          )
+          assert build_buyer_transfer_match_criteria(historical)[3] == {
+              "name": "TransferRecDate",
+              "value": ["from: 1/1/2020 to: 12/31/2025"],
+          }
+          historical_result = parse_historical_buyer_transfer_match(
+              {"results": [], "totalCost": "0", "resultCount": 0,
+               "totalResultCount": 0}, criteria=historical,
+              purchase_requested=False,
+          )
+          assert historical_result.contract_fingerprint == (
+              BUYER_TRANSFER_HISTORICAL_MATCH_CONTRACT["contract_fingerprint"]
+          )
+          transaction_query = HistoricalTransactionQuery(
+              radar_id="P-SYNTHETIC",
+              recording_dates=HistoricalTransactionDateRange(
+                  start=date(2020, 1, 1), end=date(2025, 12, 31),
+              ),
+              limit=2,
+          )
+          quote = parse_historical_transaction_quote(
+              {"resultCount": 2, "totalResultCount": 3, "totalCost": "1.00"},
+              query=transaction_query,
+          )
+          selected = parse_historical_transaction_result(
+              {"results": [{"RadarID": "P-SYNTHETIC"},
+                           {"RadarID": "P-SYNTHETIC"}],
+               "resultCount": 2, "totalResultCount": 3, "totalCost": "1.00"},
+              query=transaction_query,
+          )
+          assert quote.truncated and selected.truncated
+          assert len(selected.records) == 2
+          assert quote.scope_fingerprint == selected.scope_fingerprint
           PY
 
       - name: Upload immutable release artifact

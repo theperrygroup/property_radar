@@ -18,6 +18,7 @@ nav:
   - Getting started: getting-started.md
   - Authentication: authentication.md
   - Requests and responses: usage.md
+  - Historical transactions: historical-transactions.md
   - Errors and retries: errors-and-retries.md
   - Safety and data: safety.md
   - API:

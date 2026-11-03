@@ -3,6 +3,7 @@
 from importlib.metadata import PackageNotFoundError, version
 
 from .buyer_transfer import (
+    BUYER_TRANSFER_HISTORICAL_MATCH_CONTRACT,
     BUYER_TRANSFER_MATCH_CONTRACT,
     BUYER_TRANSFER_PROPERTY_FIELDS,
     BuyerTransferBillingEvidence,
@@ -15,6 +16,7 @@ from .buyer_transfer import (
     BuyerTransferPropertyField,
     BuyerTransferPropertyType,
     BuyerTransferPublicationWindow,
+    BuyerTransferRecordingDateRange,
     BuyerTransferRecordingWindow,
     build_buyer_transfer_match_criteria,
     buyer_transfer_scope_fingerprint,
@@ -39,6 +41,29 @@ from .exceptions import (
     RequestTimeoutError,
     ServerError,
     ValidationError,
+)
+from .historical_buyer_transfer import (
+    HistoricalBuyerTransferLinkage,
+    HistoricalBuyerTransferMatchResult,
+    HistoricalBuyerTransferProperty,
+    parse_historical_buyer_transfer_match,
+)
+from .historical_transaction import (
+    HISTORICAL_TRANSACTION_CONTRACT,
+    HISTORICAL_TRANSACTION_FIELDS,
+    HistoricalRecordingDateStatus,
+    HistoricalTransactionBillingEvidence,
+    HistoricalTransactionDateRange,
+    HistoricalTransactionDocGroup,
+    HistoricalTransactionField,
+    HistoricalTransactionFilter,
+    HistoricalTransactionQuery,
+    HistoricalTransactionQuote,
+    HistoricalTransactionRecord,
+    HistoricalTransactionResponseError,
+    HistoricalTransactionResult,
+    parse_historical_transaction_quote,
+    parse_historical_transaction_result,
 )
 from .transaction_history import (
     PROPERTY_PERSON_IDENTITY_FIELDS,
@@ -72,8 +97,11 @@ except PackageNotFoundError:  # pragma: no cover - source tree without an instal
     __version__ = "0+unknown"
 
 __all__ = [
+    "BUYER_TRANSFER_HISTORICAL_MATCH_CONTRACT",
     "BUYER_TRANSFER_MATCH_CONTRACT",
     "BUYER_TRANSFER_PROPERTY_FIELDS",
+    "HISTORICAL_TRANSACTION_CONTRACT",
+    "HISTORICAL_TRANSACTION_FIELDS",
     "PROPERTY_PERSON_IDENTITY_FIELDS",
     "TRANSACTION_HISTORY_CONTRACT",
     "TRANSACTION_HISTORY_FIELDS",
@@ -89,12 +117,27 @@ __all__ = [
     "BuyerTransferPropertyField",
     "BuyerTransferPropertyType",
     "BuyerTransferPublicationWindow",
+    "BuyerTransferRecordingDateRange",
     "BuyerTransferRecordingWindow",
     "ChargeNotAllowedError",
     "ConfigurationError",
     "ConflictError",
     "Criterion",
     "ForbiddenError",
+    "HistoricalBuyerTransferLinkage",
+    "HistoricalBuyerTransferMatchResult",
+    "HistoricalBuyerTransferProperty",
+    "HistoricalRecordingDateStatus",
+    "HistoricalTransactionBillingEvidence",
+    "HistoricalTransactionDateRange",
+    "HistoricalTransactionDocGroup",
+    "HistoricalTransactionField",
+    "HistoricalTransactionFilter",
+    "HistoricalTransactionQuery",
+    "HistoricalTransactionQuote",
+    "HistoricalTransactionRecord",
+    "HistoricalTransactionResponseError",
+    "HistoricalTransactionResult",
     "ImportItem",
     "InvalidResponseError",
     "JSONDict",
@@ -127,5 +170,8 @@ __all__ = [
     "build_buyer_transfer_match_criteria",
     "buyer_transfer_scope_fingerprint",
     "parse_buyer_transfer_match",
+    "parse_historical_buyer_transfer_match",
+    "parse_historical_transaction_quote",
+    "parse_historical_transaction_result",
     "parse_transaction_history",
 ]

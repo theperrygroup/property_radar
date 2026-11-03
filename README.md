@@ -15,10 +15,14 @@ An unofficial, typed Python client for the
 
 ## Status
 
-Version `0.3.0` covers all 37 operations in official API `5.2.0.0`. It adds
-immutable, fingerprinted contracts for strict transaction history and for an
-exact-target Buyer-criterion property/location match. Releases are built once
-and published through the configured PyPI Trusted Publisher.
+Version `0.4.0` is a release candidate. The base operation catalog covers all
+37 operations in official API `5.2.0.0`; the new historical Buyer-criterion
+property/location interface binds separate official API `5.3.1.0` evidence.
+The existing recent-query contract, fingerprint, and types remain unchanged.
+The historical transaction interface separates preview quotes from paid rows,
+with explicit date, document, and row-count bounds before billing.
+Tagging and publication are pending; releases are built once and published
+through the configured PyPI Trusted Publisher.
 
 ## Installation
 
@@ -60,10 +64,22 @@ person-to-transaction linkage.
 
 `client.properties.buyer_transfer_match()` builds a fixed
 `POST /v1/properties` query with PropertyRadar's documented Buyer Name
-(Grantee) criterion, an exact RadarID, bounded geography/windows, one-result
-limit, and typed property/location fields. Its scope fingerprint binds the
-exact criteria, field catalog, limit, and offset; paid use remains dual opt-in
-and single-attempt, with malformed purchase flags rejected before network I/O.
+(Grantee) criterion, an exact RadarID, bounded geography and recent windows,
+a one-result limit, and typed property/location fields. Its scope fingerprint
+binds the exact criteria, field catalog, limit, and offset.
+
+`client.properties.historical_buyer_transfer_match()` is the separate
+historical interface. It accepts `BuyerTransferMatchCriteria` with an inclusive
+`BuyerTransferRecordingDateRange` and `publication_window=None`, including
+ordered ranges across multiple years. Its API `5.3.1.0` contract produces
+`HistoricalBuyerTransferMatchResult`, `HistoricalBuyerTransferLinkage`, and
+`HistoricalBuyerTransferProperty`; historical `zip_five` is an optional exact
+five-digit string, preserving leading zeros. Historical scopes bind the mode,
+historical contract, and recording-date range. The request is limited to zero
+or one result, without pagination; known optional envelope metadata is
+validated and discarded rather than retained as raw data. Paid use remains
+dual opt-in and single-attempt, with malformed purchase flags rejected before
+network I/O.
 
 The result proves only that the provider returned that property for the Buyer
 criterion. It does not expose the matching document, structured grantees, or
