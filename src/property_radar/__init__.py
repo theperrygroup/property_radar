@@ -42,6 +42,12 @@ from .exceptions import (
     ServerError,
     ValidationError,
 )
+from .historical_buyer_transfer import (
+    HistoricalBuyerTransferLinkage,
+    HistoricalBuyerTransferMatchResult,
+    HistoricalBuyerTransferProperty,
+    parse_historical_buyer_transfer_match,
+)
 from .transaction_history import (
     PROPERTY_PERSON_IDENTITY_FIELDS,
     TRANSACTION_HISTORY_CONTRACT,
@@ -99,6 +105,9 @@ __all__ = [
     "ConflictError",
     "Criterion",
     "ForbiddenError",
+    "HistoricalBuyerTransferLinkage",
+    "HistoricalBuyerTransferMatchResult",
+    "HistoricalBuyerTransferProperty",
     "ImportItem",
     "InvalidResponseError",
     "JSONDict",
@@ -131,5 +140,6 @@ __all__ = [
     "build_buyer_transfer_match_criteria",
     "buyer_transfer_scope_fingerprint",
     "parse_buyer_transfer_match",
+    "parse_historical_buyer_transfer_match",
     "parse_transaction_history",
 ]

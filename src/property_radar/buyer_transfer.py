@@ -278,6 +278,11 @@ BUYER_TRANSFER_MATCH_CONTRACT = _freeze_mapping(
 
 _HISTORICAL_CONTRACT_FINGERPRINT_SOURCE: dict[str, object] = {
     **_CONTRACT_FINGERPRINT_SOURCE,
+    "api_version": "5.3.1.0",
+    "spec_source_sha256": (
+        # pragma: allowlist nextline secret
+        "9feadf6a8fade0530045f4d6f14db69f520144078a71637ef6c999aea8493c14"
+    ),
     "contract_version": 1,
     "mode": "historical_recording_range",
     "criteria_source_inspected_on": "2026-11-03",
@@ -289,6 +294,31 @@ _HISTORICAL_CONTRACT_FINGERPRINT_SOURCE: dict[str, object] = {
     ),
     "publication_window_values": (),
     "recording_window_values": (),
+    "property_fields": {
+        **_PROPERTY_FIELD_CONTRACT_SOURCE,
+        "ZipFive": {
+            "type": "string",
+            "required": False,
+            "pattern": "^[0-9]{5}$",
+        },
+    },
+    "envelope_fields": (
+        *_BUYER_TRANSFER_ENVELOPE_FIELDS,
+        "maxDistanceMiles",
+        "nextPageToken",
+        "facets",
+    ),
+    "parser_policy": {
+        **_PARSER_POLICY_SOURCE,
+        "result_type": "HistoricalBuyerTransferMatchResult",
+        "optional_metadata": {
+            "maxDistanceMiles": {"type": "integer", "minimum": 0, "maximum": 250},
+            "nextPageToken": {"type": "string", "allowed_value": ""},
+            "facets": {"type": "object", "allowed_value": {}},
+        },
+        "retain_optional_metadata": False,
+        "pagination": False,
+    },
     "recording_date_range": {
         "criterion": "TransferRecDate",
         "boundary_type": "date",
@@ -309,7 +339,7 @@ BUYER_TRANSFER_HISTORICAL_MATCH_CONTRACT = _freeze_mapping(
         ),
     }
 )
-"""Versioned historical criteria contract using the unchanged response schema."""
+"""Versioned historical request and strict API 5.3.1.0 response contract."""
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -612,9 +642,9 @@ class BuyerTransferMatchResult:
 
     def __post_init__(self) -> None:
         """Bind the linkage and billing evidence to one public contract."""
-        if self.contract_fingerprint not in (
-            BUYER_TRANSFER_MATCH_CONTRACT["contract_fingerprint"],
-            BUYER_TRANSFER_HISTORICAL_MATCH_CONTRACT["contract_fingerprint"],
+        if (
+            self.contract_fingerprint
+            != BUYER_TRANSFER_MATCH_CONTRACT["contract_fingerprint"]
         ):
             raise ValueError("contract_fingerprint does not identify this contract")
         if (
@@ -720,6 +750,8 @@ def parse_buyer_transfer_match(
     """
     if not isinstance(criteria, BuyerTransferMatchCriteria):
         _raise_invalid("criteria_type")
+    if criteria.recording_date_range is not None:
+        _raise_invalid("historical_criteria_requires_historical_parser")
     if purchase_requested is not None and type(purchase_requested) is not bool:
         _raise_invalid("purchase_requested")
     typed_envelope = _snapshot_string_mapping(
@@ -790,12 +822,7 @@ def parse_buyer_transfer_match(
         billing_status = "preview"
     return BuyerTransferMatchResult(
         contract_fingerprint=cast(
-            str,
-            (
-                BUYER_TRANSFER_HISTORICAL_MATCH_CONTRACT
-                if criteria.recording_date_range is not None
-                else BUYER_TRANSFER_MATCH_CONTRACT
-            )["contract_fingerprint"],
+            str, BUYER_TRANSFER_MATCH_CONTRACT["contract_fingerprint"]
         ),
         scope_fingerprint=scope_fingerprint,
         linkage=linkage,

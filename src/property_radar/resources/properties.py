@@ -13,6 +13,10 @@ from ..buyer_transfer import (
     parse_buyer_transfer_match,
 )
 from ..exceptions import InvalidResponseError
+from ..historical_buyer_transfer import (
+    HistoricalBuyerTransferMatchResult,
+    parse_historical_buyer_transfer_match,
+)
 from ..transaction_history import (
     TRANSACTION_HISTORY_FIELDS,
     TransactionHistory,
@@ -541,6 +545,13 @@ class PropertiesResource(BaseResource):
         """
         if type(purchase) is not bool:
             raise TypeError("purchase must be a boolean")
+        if (
+            isinstance(criteria, BuyerTransferMatchCriteria)
+            and criteria.recording_date_range is not None
+        ):
+            raise ValueError(
+                "historical criteria require historical_buyer_transfer_match"
+            )
         envelope = self.search(
             criteria=build_buyer_transfer_match_criteria(criteria),
             fields=BUYER_TRANSFER_PROPERTY_FIELDS,
@@ -552,4 +563,35 @@ class PropertiesResource(BaseResource):
             envelope,
             criteria=criteria,
             purchase_requested=purchase,
+        )
+
+    def historical_buyer_transfer_match(
+        self,
+        *,
+        criteria: BuyerTransferMatchCriteria,
+        purchase: bool = False,
+    ) -> HistoricalBuyerTransferMatchResult:
+        """Return a bounded historical Buyer match under the API 5.3.1 contract.
+
+        Exact recording dates, buyer, RadarID and geography are required. The
+        request retains the one-result limit and default preview behavior;
+        paid calls require the client opt-in and are never retried. The result
+        preserves five-digit ZIP strings without asserting a document/grantee
+        association. Known optional response metadata is validated and discarded.
+        """
+        if type(purchase) is not bool:
+            raise TypeError("purchase must be a boolean")
+        if not isinstance(criteria, BuyerTransferMatchCriteria):
+            raise TypeError("criteria must be BuyerTransferMatchCriteria")
+        if criteria.recording_date_range is None:
+            raise ValueError("historical criteria require recording_date_range")
+        envelope = self.search(
+            criteria=build_buyer_transfer_match_criteria(criteria),
+            fields=BUYER_TRANSFER_PROPERTY_FIELDS,
+            limit=1,
+            start=0,
+            purchase=purchase,
+        )
+        return parse_historical_buyer_transfer_match(
+            envelope, criteria=criteria, purchase_requested=purchase
         )

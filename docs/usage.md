@@ -152,9 +152,9 @@ confirm a recorded grantee or verified purchase.
 
 #### Historical recording dates
 
-For a historical query, provide an explicit `BuyerTransferRecordingDateRange`
-and set `publication_window=None`. This selects recording dates without the
-recent publication filter:
+For a historical query, use `historical_buyer_transfer_match()` with an
+explicit `BuyerTransferRecordingDateRange` and `publication_window=None`.
+This selects recording dates without the recent publication filter:
 
 ```python
 from datetime import date
@@ -163,6 +163,7 @@ from property_radar import (
     BUYER_TRANSFER_HISTORICAL_MATCH_CONTRACT,
     BuyerTransferMatchCriteria,
     BuyerTransferRecordingDateRange,
+    HistoricalBuyerTransferMatchResult,
     PropertyRadarClient,
 )
 
@@ -179,9 +180,11 @@ historical_query = BuyerTransferMatchCriteria(
 )
 
 with PropertyRadarClient() as client:
-    result = client.properties.buyer_transfer_match(
-        criteria=historical_query,
-        purchase=False,
+    result: HistoricalBuyerTransferMatchResult = (
+        client.properties.historical_buyer_transfer_match(
+            criteria=historical_query,
+            purchase=False,
+        )
     )
 
 assert (
@@ -196,12 +199,25 @@ No provider maximum span is documented; any narrower limit belongs to the
 caller's authorization policy. A historical range cannot be combined with the
 relative `recording_window` or a non-`None` `publication_window`.
 
-`BUYER_TRANSFER_HISTORICAL_MATCH_CONTRACT` version 1 records this separate
-historical contract. Historical scope fingerprints seal the mode, contract
+`BUYER_TRANSFER_HISTORICAL_MATCH_CONTRACT` version 1 binds separate official
+API `5.3.1.0` provenance. Historical scope fingerprints seal the mode, contract
 fingerprint, and exact recording-date range as well as the request criteria,
-fields, limit, and offset. The parser reports the historical contract
-fingerprint for a historical query. The existing recent-query
-`BUYER_TRANSFER_MATCH_CONTRACT` and its fingerprint are unchanged.
+fields, limit, and offset. For a detached response envelope, use
+`parse_historical_buyer_transfer_match`; it reports the historical contract
+fingerprint and returns `HistoricalBuyerTransferMatchResult`.
+
+The new `HistoricalBuyerTransferMatchResult`,
+`HistoricalBuyerTransferLinkage`, and `HistoricalBuyerTransferProperty` types
+expose the same attributes as their recent-query counterparts except that
+historical `zip_five` is `str | None`. A supplied ZIP must contain exactly five
+digits and is preserved unchanged, including leading zeros such as `"01234"`.
+The historical parser validates known optional envelope metadata and discards
+it; the typed result retains no raw response. Historical calls request at most
+one result, reject counts greater than one, and never paginate.
+
+The existing recent-query method `buyer_transfer_match()`,
+`parse_buyer_transfer_match`, `BUYER_TRANSFER_MATCH_CONTRACT`, its fingerprint,
+and its types remain unchanged under their API `5.2.0.0` contract.
 
 A recording date is the document's recording date, not the transaction's
 closing date. Historical results retain the same property-level Buyer

@@ -4,7 +4,7 @@ import property_radar
 
 
 def test_installed_version_uses_package_metadata() -> None:
-    assert property_radar.__version__ == "0.3.0"
+    assert property_radar.__version__ == "0.4.0"
 
 
 def test_typing_marker_is_packaged() -> None:

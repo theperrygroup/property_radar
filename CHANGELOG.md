@@ -8,6 +8,10 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-03
+
+Release candidate; tagging and publication are pending.
+
 ### Added
 
 - `BuyerTransferRecordingDateRange(start, end)` for exact, inclusive historical
@@ -16,9 +20,16 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   years and cannot include a relative `recording_window`; narrower bounds
   belong to caller authorization policy.
 - `BUYER_TRANSFER_HISTORICAL_MATCH_CONTRACT` version 1 and historical scope
-  fingerprints that seal the mode, contract, and exact date range. Parsed
-  historical results report the historical contract fingerprint; the existing
-  recent-query contract and fingerprint remain unchanged.
+  fingerprints, binding separate official API `5.3.1.0` provenance and sealing
+  the mode, contract, and exact date range. Parsed historical results report
+  the historical contract fingerprint.
+- `PropertiesResource.historical_buyer_transfer_match()` and
+  `parse_historical_buyer_transfer_match()` with dedicated
+  `HistoricalBuyerTransferMatchResult`, `HistoricalBuyerTransferLinkage`, and
+  `HistoricalBuyerTransferProperty` types. Historical `zip_five` preserves an
+  exact five-digit string, including leading zeros. Known optional envelope
+  metadata is validated and discarded, with no raw response retained. Calls
+  accept at most one result and do not paginate.
 
 ### Clarified
 
@@ -26,6 +37,8 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   document, structured grantees, or automatic purchase verification. Recording
   dates are distinct from closing dates, and existing no-charge controls are
   unchanged.
+- The historical interface is additive. The existing API `5.2.0.0` recent-query
+  method, parser, contract fingerprint, and types remain unchanged.
 
 ## [0.3.0] - 2026-07-31
 
@@ -105,7 +118,8 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Python 3.10 through 3.14 CI, CodeQL, GitHub Pages, Dependabot, and
   trusted-publishing release workflows.
 
-[Unreleased]: https://github.com/theperrygroup/property_radar/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/theperrygroup/property_radar/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/theperrygroup/property_radar/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/theperrygroup/property_radar/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/theperrygroup/property_radar/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/theperrygroup/property_radar/releases/tag/v0.1.0
