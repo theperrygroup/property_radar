@@ -147,7 +147,7 @@ def test_success_request_headers_and_query_encoding() -> None:
     request = captured[0]
     assert request.headers["Authorization"] == "Bearer synthetic-token"
     assert request.headers["Accept"] == "application/json"
-    assert request.headers["User-Agent"] == "property-radar-python/0.4.0"
+    assert request.headers["User-Agent"] == "property-radar-python/0.4.1"
     assert request.url.params.multi_items() == [
         ("Fields", "RadarID,APN"),
         ("Dates", "Today"),

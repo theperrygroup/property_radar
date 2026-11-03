@@ -10,7 +10,7 @@ deny-by-default paid or persistent operations.
 
 ## Project State
 
-The `0.4.0` release candidate covers all 37 operations in PropertyRadar API
+The `0.4.1` implementation covers all 37 operations in PropertyRadar API
 contract `5.2.0.0` and adds a separate immutable, fingerprinted historical
 Buyer-criterion property/location interface based on API `5.3.1.0`. Exact,
 inclusive, ordered recording-date ranges may span multiple years. Historical
@@ -23,8 +23,7 @@ The separate [historical transaction interface](historical-transactions.md)
 returns preview counts and estimated cost without requiring rows, and retains
 the selected paid rows with explicit completeness and date-ambiguity metadata.
 
-Tagging and publication are pending. Releases use a build-once workflow and
-PyPI Trusted Publishing.
+Releases use a build-once workflow and PyPI Trusted Publishing.
 
 ## Vendor Boundary
 

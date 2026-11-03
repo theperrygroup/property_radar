@@ -8,9 +8,18 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-11-03
+
+### Fixed
+
+- Update the pinned PyPI publisher to v1.14.3, which supports package metadata
+  2.5 and includes upstream security fixes. Metadata verification and trusted
+  publishing remain enabled, and the historical APIs are unchanged.
+
 ## [0.4.0] - 2026-11-03
 
-Release candidate; tagging and publication are pending.
+The tag and artifacts were created, but the older publisher rejected metadata
+2.5 before upload. This version was not published to PyPI; use 0.4.1.
 
 ### Added
 
@@ -126,7 +135,8 @@ Release candidate; tagging and publication are pending.
 - Python 3.10 through 3.14 CI, CodeQL, GitHub Pages, Dependabot, and
   trusted-publishing release workflows.
 
-[Unreleased]: https://github.com/theperrygroup/property_radar/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/theperrygroup/property_radar/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/theperrygroup/property_radar/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/theperrygroup/property_radar/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/theperrygroup/property_radar/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/theperrygroup/property_radar/compare/v0.1.0...v0.2.0
