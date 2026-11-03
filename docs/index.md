@@ -19,6 +19,10 @@ existing recent-query contracts, fingerprints, types, typed transaction-history
 evidence, and raw resource return types remain unchanged. See the
 [usage guide](usage.md#historical-recording-dates) for historical queries.
 
+The separate [historical transaction interface](historical-transactions.md)
+returns preview counts and estimated cost without requiring rows, and retains
+the selected paid rows with explicit completeness and date-ambiguity metadata.
+
 Tagging and publication are pending. Releases use a build-once workflow and
 PyPI Trusted Publishing.
 

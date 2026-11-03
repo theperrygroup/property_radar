@@ -19,6 +19,8 @@ Version `0.4.0` is a release candidate. The base operation catalog covers all
 37 operations in official API `5.2.0.0`; the new historical Buyer-criterion
 property/location interface binds separate official API `5.3.1.0` evidence.
 The existing recent-query contract, fingerprint, and types remain unchanged.
+The historical transaction interface separates preview quotes from paid rows,
+with explicit date, document, and row-count bounds before billing.
 Tagging and publication are pending; releases are built once and published
 through the configured PyPI Trusted Publisher.
 

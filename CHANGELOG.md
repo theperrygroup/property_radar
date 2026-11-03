@@ -30,6 +30,14 @@ Release candidate; tagging and publication are pending.
   exact five-digit string, including leading zeros. Known optional envelope
   metadata is validated and discarded, with no raw response retained. Calls
   accept at most one result and do not paginate.
+- A versioned historical transaction quote/result contract and
+  `historical_transaction_history()` convenience. Explicit recording dates,
+  document filters, and a caller-selected row limit bound the request before
+  billing. Quotes distinguish selected and total counts without requiring
+  response rows; paid results retain all selected rows and report truncation.
+  Ambiguous recording-date arrays stay unverified and are never converted.
+- Historical transaction parsing failures retain independently validated
+  billing fields in a typed exception without retaining rows or raw payloads.
 
 ### Clarified
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
-from typing import Literal, cast
+from typing import Literal, cast, overload
 
 from ..buyer_transfer import (
     BUYER_TRANSFER_PROPERTY_FIELDS,
@@ -16,6 +16,13 @@ from ..exceptions import InvalidResponseError
 from ..historical_buyer_transfer import (
     HistoricalBuyerTransferMatchResult,
     parse_historical_buyer_transfer_match,
+)
+from ..historical_transaction import (
+    HistoricalTransactionQuery,
+    HistoricalTransactionQuote,
+    HistoricalTransactionResult,
+    parse_historical_transaction_quote,
+    parse_historical_transaction_result,
 )
 from ..transaction_history import (
     TRANSACTION_HISTORY_FIELDS,
@@ -595,3 +602,59 @@ class PropertiesResource(BaseResource):
         return parse_historical_buyer_transfer_match(
             envelope, criteria=criteria, purchase_requested=purchase
         )
+
+    @overload
+    def historical_transaction_history(
+        self,
+        *,
+        query: HistoricalTransactionQuery,
+        purchase: Literal[False] = False,
+    ) -> HistoricalTransactionQuote: ...
+
+    @overload
+    def historical_transaction_history(
+        self,
+        *,
+        query: HistoricalTransactionQuery,
+        purchase: Literal[True],
+    ) -> HistoricalTransactionResult: ...
+
+    @overload
+    def historical_transaction_history(
+        self,
+        *,
+        query: HistoricalTransactionQuery,
+        purchase: bool,
+    ) -> HistoricalTransactionQuote | HistoricalTransactionResult: ...
+
+    def historical_transaction_history(
+        self,
+        *,
+        query: HistoricalTransactionQuery,
+        purchase: bool = False,
+    ) -> HistoricalTransactionQuote | HistoricalTransactionResult:
+        """Quote or purchase one explicitly bounded historical selection.
+
+        The default preview returns typed counts and an estimated cost without
+        transaction rows. An explicit paid request returns all selected rows;
+        it also requires the client charge opt-in and is never retried. Range,
+        document filters and row limit are applied by the provider before
+        counting and billing. Neither response authorizes a later purchase.
+        """
+        if type(purchase) is not bool:
+            raise TypeError("purchase must be a boolean")
+        if type(query) is not HistoricalTransactionQuery:
+            raise TypeError("query must be HistoricalTransactionQuery")
+        envelope = self._transport.request(
+            "GET",
+            f"/v1/properties/{encode_path_segment(query.radar_id)}/transactions",
+            params=query.params(purchase=purchase),
+            charge=purchase,
+        )
+        try:
+            if purchase:
+                return parse_historical_transaction_result(envelope, query=query)
+            return parse_historical_transaction_quote(envelope, query=query)
+        finally:
+            # Do not retain raw response or property scope in parser-error frames.
+            del envelope, query
