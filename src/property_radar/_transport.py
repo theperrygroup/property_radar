@@ -236,7 +236,7 @@ class Transport:
         return {
             "Accept": "application/json",
             "Authorization": f"Bearer {token}",
-            "User-Agent": "property-radar-python/0.4.0",
+            "User-Agent": "property-radar-python/0.4.1",
         }
 
 
