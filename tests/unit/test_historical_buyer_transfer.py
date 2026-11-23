@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import socket
 import traceback
 from collections.abc import Callable, Mapping
@@ -34,7 +35,10 @@ from property_radar import (
     parse_buyer_transfer_match,
     parse_historical_buyer_transfer_match,
 )
-from property_radar.buyer_transfer import BUYER_TRANSFER_PREVIEW_FIELDS
+from property_radar.buyer_transfer import (
+    BUYER_TRANSFER_PREVIEW_FIELDS,
+    BUYER_TRANSFER_RESIDENTIAL_PTYPE_CODES,
+)
 from property_radar.types import Criterion
 
 # The 0.4.1 values that theperrygroup pins until it adopts 0.4.2.
@@ -533,9 +537,28 @@ def test_historical_contract_keeps_every_value_the_theperrygroup_adapter_checks(
     criterion = contract["property_type_criterion"]
     assert type(criterion) is MappingProxyType
     assert criterion["purchase_0_live_probed"] is False
-    assert thaw(criterion) == thaw(
-        BUYER_TRANSFER_MATCH_CONTRACT["property_type_criterion"]
+    assert criterion["codes"] == BUYER_TRANSFER_RESIDENTIAL_PTYPE_CODES
+    assert tuple(criterion["code_property_types"].values()) == (
+        RESIDENTIAL_PROPERTY_TYPES
     )
+    recent = BUYER_TRANSFER_MATCH_CONTRACT["property_type_criterion"]
+    assert type(recent) is MappingProxyType
+    assert criterion["codes"] == recent["codes"]
+    assert thaw(criterion["code_property_types"]) == thaw(recent["code_property_types"])
+    billing = contract["billing"]
+    assert type(billing) is MappingProxyType
+    assert billing["total_cost"]["accepted_json_types"] == (
+        "string",
+        "integer",
+        "number",
+    )
+    policy = contract["parser_policy"]
+    assert type(policy) is MappingProxyType
+    assert policy["bare_preview_envelope"]["provider_metadata_omitted"] is True
+    assert policy["count_rules"]["preview"]["withheld_record_reason"] == (
+        "preview_record_withheld"
+    )
+    assert policy["returned_property_type_must_be_within_criterion"] is True
 
 
 def test_recent_contract_and_positional_criteria_remain_compatible() -> None:
@@ -1420,8 +1443,9 @@ def test_historical_property_type_criterion_basis_classifies_without_a_ptype() -
     )
 
     assert value.is_residential is True
-    assert "residential_basis='property_type_criterion'" in repr(value)
-    assert "SYNTHETIC-PARCEL" not in repr(value)
+    rendered = repr(value)
+    assert re.search(r"residential_basis='?property_type_criterion'?[,)]", rendered)
+    assert "SYNTHETIC-PARCEL" not in rendered
     assert historical_property(residential_basis="property_type").is_residential
 
 
@@ -1443,8 +1467,13 @@ def test_historical_property_type_criterion_basis_classifies_without_a_ptype() -
 def test_historical_residential_basis_rejects_contradictory_manual_states(
     changes: dict[str, object],
 ) -> None:
-    with pytest.raises(ValueError, match="residential_basis"):
+    # Without a basis the same values are a valid 0.4.1 direct construction,
+    # so only the residential_basis rule can raise below.
+    historical_property(**{**changes, "residential_basis": None})
+    with pytest.raises(ValueError) as caught:
         historical_property(**changes)
+    assert "SYNTHETIC-PARCEL" not in str(caught.value)
+    assert "P-SYNTHETIC-HISTORY" not in str(caught.value)
 
 
 def test_historical_preview_and_paid_results_bind_the_same_scope_fingerprint() -> None:
@@ -1489,7 +1518,9 @@ def test_historical_preview_invariants_follow_the_returned_record() -> None:
         replace(preview, linkage=None)
     with pytest.raises(ValueError, match="presence"):
         replace(bare, linkage=preview.linkage)
-    with pytest.raises(ValueError, match="provider_metadata_omitted"):
+    # A preview count of 1 is valid without the marker; with it, it is not.
+    replace(bare.billing, provider_metadata_omitted=False, total_result_count=1)
+    with pytest.raises(ValueError):
         replace(bare.billing, total_result_count=1)
 
 

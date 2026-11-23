@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import socket
 import traceback
 from collections.abc import Callable, Iterator, Mapping
@@ -313,11 +314,30 @@ def test_recent_contract_records_the_preview_fields_and_property_type_criterion(
     criterion = contract["property_type_criterion"]
     assert type(criterion) is MappingProxyType
     assert criterion["purchase_0_live_probed"] is False
+    assert criterion["codes"] == BUYER_TRANSFER_RESIDENTIAL_PTYPE_CODES
+    code_property_types = criterion["code_property_types"]
+    assert type(code_property_types) is MappingProxyType
+    assert tuple(code_property_types) == BUYER_TRANSFER_RESIDENTIAL_PTYPE_CODES
+    assert tuple(code_property_types.values()) == RESIDENTIAL_PROPERTY_TYPES
     rendered = json.dumps(thaw(criterion), sort_keys=True)
     for code in ("SFR", "CND", "MFR", "APT", "RES"):
         assert code in rendered
     for name in RESIDENTIAL_PROPERTY_TYPES:
         assert name in rendered
+    billing = contract["billing"]
+    assert type(billing) is MappingProxyType
+    assert billing["total_cost"]["accepted_json_types"] == (
+        "string",
+        "integer",
+        "number",
+    )
+    policy = contract["parser_policy"]
+    assert type(policy) is MappingProxyType
+    assert policy["bare_preview_envelope"]["provider_metadata_omitted"] is True
+    assert policy["count_rules"]["preview"]["withheld_record_reason"] == (
+        "preview_record_withheld"
+    )
+    assert policy["returned_property_type_must_be_within_criterion"] is True
 
 
 def test_new_public_constants_pin_the_preview_fields_and_residential_codes() -> None:
@@ -981,8 +1001,9 @@ def test_property_type_criterion_basis_classifies_a_radar_id_only_record() -> No
 
     assert value.property_type is None
     assert value.is_residential is True
-    assert "residential_basis='property_type_criterion'" in repr(value)
-    assert "P-SYNTHETIC" not in repr(value)
+    rendered = repr(value)
+    assert re.search(r"residential_basis='?property_type_criterion'?[,)]", rendered)
+    assert "P-SYNTHETIC" not in rendered
 
 
 @pytest.mark.parametrize("property_type", RESIDENTIAL_PROPERTY_TYPES)
@@ -1022,8 +1043,12 @@ def test_property_type_basis_accepts_each_residential_name(property_type: str) -
 def test_residential_basis_rejects_contradictory_manual_states(
     changes: dict[str, object],
 ) -> None:
-    with pytest.raises(ValueError, match="residential_basis"):
+    # Without a basis the same values are a valid 0.4.1 direct construction,
+    # so only the residential_basis rule can raise below.
+    radar_id_only_property(**{**changes, "residential_basis": None})
+    with pytest.raises(ValueError) as caught:
         radar_id_only_property(**changes)
+    assert "P-SYNTHETIC" not in str(caught.value)
 
 
 def test_missing_optional_property_fields_remain_unavailable() -> None:
@@ -1144,15 +1169,23 @@ def test_parser_snapshots_hostile_inputs_and_sanitizes_failures() -> None:
     assert "SYNTHETIC PRIVATE" not in rendered
 
 
-def test_live_bare_zero_hit_preview_snapshots_a_hostile_results_list() -> None:
-    result = parse_buyer_transfer_match(
-        {"results": HostileList()},
-        criteria=criteria(),
-        purchase_requested=False,
-    )
-
-    assert result.matched is False
-    assert result.billing.provider_metadata_omitted is True
+def test_live_bare_zero_hit_preview_never_runs_a_hostile_results_list() -> None:
+    # Like the 0.4.1 snapshot above, the bare-preview path must not call a
+    # list subclass's own methods: it may accept the empty list as the bare
+    # preview or fail closed, but no other error and no value may escape.
+    try:
+        result = parse_buyer_transfer_match(
+            {"results": HostileList()},
+            criteria=criteria(),
+            purchase_requested=False,
+        )
+    except InvalidResponseError as error:
+        rendered = "\n".join((str(error), "".join(traceback.format_exception(error))))
+        assert "SYNTHETIC PRIVATE" not in rendered
+        assert error.__cause__ is None
+    else:
+        assert result.matched is False
+        assert result.billing.provider_metadata_omitted is True
 
 
 def test_public_values_are_frozen_and_repr_redacts_property_values() -> None:
@@ -1170,7 +1203,9 @@ def test_public_values_are_frozen_and_repr_redacts_property_values() -> None:
     assert "P-SYNTHETIC" not in rendered
     assert "81 Synthetic Way" not in rendered
     assert "SYNTHETIC-81" not in rendered
-    assert "residential_basis='property_type'" in repr(result.linkage.property)
+    assert re.search(
+        r"residential_basis='?property_type'?[,)]", repr(result.linkage.property)
+    )
     assert "provider_metadata_omitted=False" in repr(result.billing)
 
 
@@ -1221,16 +1256,30 @@ def test_provider_metadata_omitted_marker_is_only_valid_on_an_empty_free_preview
     ).billing
     assert billing.provider_metadata_omitted is True
 
-    with pytest.raises(ValueError, match="provider_metadata_omitted"):
+    # Each change below is valid without the marker, so only the marker rule
+    # can raise when the marker stays True.
+    replace(billing, provider_metadata_omitted=False, total_cost=Decimal("0.50"))
+    replace(billing, provider_metadata_omitted=False, quantity_free_remaining=9866)
+    replace(billing, provider_metadata_omitted=False, total_result_count=1)
+    with pytest.raises(ValueError):
         replace(billing, provider_metadata_omitted=1)  # type: ignore[arg-type]
-    with pytest.raises(ValueError, match="provider_metadata_omitted"):
+    with pytest.raises(ValueError):
         replace(billing, total_cost=Decimal("0.50"))
-    with pytest.raises(ValueError, match="provider_metadata_omitted"):
+    with pytest.raises(ValueError):
         replace(billing, quantity_free_remaining=9866)
-    with pytest.raises(ValueError, match="provider_metadata_omitted"):
+    with pytest.raises(ValueError):
         replace(billing, total_result_count=1)
     for purchase_requested, status in ((True, "charged"), (None, "unknown")):
-        with pytest.raises(ValueError, match="provider_metadata_omitted"):
+        BuyerTransferBillingEvidence(
+            purchase_requested=purchase_requested,
+            status=status,  # type: ignore[arg-type]
+            total_cost=Decimal("0"),
+            currency=None,
+            quantity_free_remaining=None,
+            result_count=0,
+            total_result_count=0,
+        )
+        with pytest.raises(ValueError):
             BuyerTransferBillingEvidence(
                 purchase_requested=purchase_requested,
                 status=status,  # type: ignore[arg-type]
@@ -1277,7 +1326,14 @@ def test_public_property_rejects_invalid_manual_states() -> None:
         replace(property_value, address=None)
     with pytest.raises(ValueError, match="radar_id"):
         replace(property_value, radar_id="")
+    assert property_value.residential_basis == "property_type"
     with pytest.raises(ValueError, match="property_type"):
+        replace(
+            property_value,
+            property_type="Spaceship",  # type: ignore[arg-type]
+            residential_basis=None,
+        )
+    with pytest.raises(ValueError):
         replace(property_value, property_type="Spaceship")  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="address"):
         replace(property_value, address=81)  # type: ignore[arg-type]

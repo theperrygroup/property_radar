@@ -1260,7 +1260,7 @@ def test_buyer_total_cost_int_float_and_decimal_string_through_the_resource(
     assert preview.billing.total_cost == expected
 
 
-@pytest.mark.parametrize("total_cost", [True, None, -1, -0.0, float("nan"), "1e3"])
+@pytest.mark.parametrize("total_cost", [True, None, -1, -0.0, 1e64, 10**64, "1e3"])
 @pytest.mark.parametrize("mode", BUYER_MODES)
 def test_buyer_invalid_total_cost_through_the_resource_fails_closed(
     mode: str, total_cost: object
@@ -1269,6 +1269,33 @@ def test_buyer_invalid_total_cost_through_the_resource_fails_closed(
         run_buyer_match(
             mode,
             [httpx.Response(200, json=paid_buyer_envelope(mode, total_cost))],
+            purchase=True,
+            allow_charges=True,
+        )
+
+
+@pytest.mark.parametrize(
+    ("token", "total_cost"),
+    [("NaN", float("nan")), ("Infinity", float("inf")), ("-Infinity", float("-inf"))],
+)
+@pytest.mark.parametrize("mode", BUYER_MODES)
+def test_buyer_non_finite_total_cost_token_through_the_resource_fails_closed(
+    mode: str, token: str, total_cost: float
+) -> None:
+    # httpx refuses to encode NaN or Infinity, so the envelope goes out as raw
+    # JSON text; the transport's JSON decoder reads these tokens as floats.
+    body = json.dumps(paid_buyer_envelope(mode, total_cost))
+    assert f'"totalCost": {token},' in body
+    with pytest.raises(InvalidResponseError, match=r"\(total_cost\)"):
+        run_buyer_match(
+            mode,
+            [
+                httpx.Response(
+                    200,
+                    content=body.encode(),
+                    headers={"content-type": "application/json"},
+                )
+            ],
             purchase=True,
             allow_charges=True,
         )
