@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import socket
 import traceback
 from collections.abc import Callable, Mapping
 from dataclasses import FrozenInstanceError, replace
 from datetime import date, datetime
 from decimal import Decimal
 from types import MappingProxyType
+from typing import NoReturn
 
 import httpx
 import pytest
@@ -16,6 +18,7 @@ from property_radar import (
     BUYER_TRANSFER_HISTORICAL_MATCH_CONTRACT,
     BUYER_TRANSFER_MATCH_CONTRACT,
     BUYER_TRANSFER_PROPERTY_FIELDS,
+    BuyerTransferBillingEvidence,
     BuyerTransferMatchCriteria,
     BuyerTransferMatchResult,
     BuyerTransferRecordingDateRange,
@@ -31,6 +34,55 @@ from property_radar import (
     parse_buyer_transfer_match,
     parse_historical_buyer_transfer_match,
 )
+from property_radar.buyer_transfer import BUYER_TRANSFER_PREVIEW_FIELDS
+from property_radar.types import Criterion
+
+# The 0.4.1 values that theperrygroup pins until it adopts 0.4.2.
+RECENT_CONTRACT_FINGERPRINT_0_4_1 = (
+    # pragma: allowlist nextline secret
+    "299cfaba5ddfc8337a290352433969f1f1363fa1a545080773761c2c99d2c8be"
+)
+HISTORICAL_CONTRACT_FINGERPRINT_0_4_1 = (
+    # pragma: allowlist nextline secret
+    "5fae2c3bd113264a7fbed5bdd7c80278787acd279f567e0f629c09f0ef58ee52"
+)
+PROPERTY_TYPE_CRITERION: Criterion = {
+    "name": "PropertyType",
+    "value": [{"name": "PType", "value": ["SFR", "CND", "MFR", "APT", "RES"]}],
+}
+RESIDENTIAL_PROPERTY_TYPES = (
+    "Single Family",
+    "Condominium",
+    "Multi-Family 2-4",
+    "Multi-Family 5+",
+    "Other Res.",
+)
+NON_RESIDENTIAL_PROPERTY_TYPES = (
+    "Commercial",
+    "Industrial",
+    "Agricultural",
+    "Land",
+    "Government",
+    "Recreation",
+    "Transport",
+    "Utility",
+    "Other",
+    "Unknown",
+)
+FIELDS_WITHOUT_PROPERTY_TYPE = tuple(
+    field_name for field_name in BUYER_TRANSFER_PROPERTY_FIELDS if field_name != "PType"
+)
+
+
+@pytest.fixture(autouse=True)
+def _deny_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    def refuse(*_: object, **__: object) -> NoReturn:
+        raise AssertionError("synthetic tests must not open a network connection")
+
+    monkeypatch.setattr(socket.socket, "connect", refuse)
+    monkeypatch.setattr(socket.socket, "connect_ex", refuse)
+    monkeypatch.setattr(socket, "create_connection", refuse)
+    monkeypatch.setattr(socket, "getaddrinfo", refuse)
 
 
 class DateSubclass(date):
@@ -43,6 +95,48 @@ class StringSubclass(str):
 
 class IntegerSubclass(int):
     pass
+
+
+def live_bare_zero_hit_preview() -> dict[str, object]:
+    # Exact live 0-hit POST /v1/properties?Purchase=0 body: no metadata at all.
+    return {"results": []}
+
+
+def live_one_hit_radar_id_only_preview() -> dict[str, object]:
+    # Live 1-hit Fields=RadarID preview shape with a synthetic RadarID.
+    return {
+        "results": [{"RadarID": "P-SYNTHETIC-HISTORY"}],
+        "totalCost": 0,
+        "resultCount": 0,
+        "totalResultCount": 1,
+    }
+
+
+def live_withheld_record_preview() -> dict[str, object]:
+    # Live 1-hit preview that asked for paid fields: the record is withheld.
+    return {
+        "results": [],
+        "totalCost": 0,
+        "resultCount": 0,
+        "totalResultCount": 1,
+        "quantityFreeRemaining": 9866,
+    }
+
+
+def historical_paid_envelope(total_cost: object = 1) -> dict[str, object]:
+    return {
+        "results": [
+            {
+                "RadarID": "P-SYNTHETIC-HISTORY",
+                "PType": "Condominium",
+                "ZipFive": "00501",
+                "FIPS": "49035",
+            }
+        ],
+        "totalCost": total_cost,
+        "resultCount": 1,
+        "totalResultCount": 1,
+    }
 
 
 def historical_criteria(**changes: object) -> BuyerTransferMatchCriteria:
@@ -211,12 +305,18 @@ def test_historical_query_uses_exact_dates_and_omits_publication_filter() -> Non
         {"name": "County", "value": [49035]},
         {"name": "Buyer", "value": ["Synthetic Historical Buyer"]},
         {"name": "TransferRecDate", "value": ["from: 1/2/2023 to: 10/31/2023"]},
+        {
+            "name": "PropertyType",
+            "value": [{"name": "PType", "value": ["SFR", "CND", "MFR", "APT", "RES"]}],
+        },
         {"name": "RadarID", "value": ["P-SYNTHETIC-HISTORY"]},
     )
     most_recent = build_buyer_transfer_match_criteria(
         historical_criteria(most_recent_change_of_ownership_only=True)
     )
-    assert most_recent[-2] == {"name": "isMostRecentMarketTransfer", "value": [1]}
+    assert most_recent[-3] == {"name": "isMostRecentMarketTransfer", "value": [1]}
+    assert most_recent[-2] == PROPERTY_TYPE_CRITERION
+    assert most_recent[-1] == {"name": "RadarID", "value": ["P-SYNTHETIC-HISTORY"]}
     assert all(item["name"] != "TransferPublishedDate" for item in most_recent)
 
 
@@ -281,9 +381,11 @@ def test_historical_scope_hashes_mode_contract_and_iso_recording_boundaries() ->
                 "name": "TransferRecDate",
                 "value": ["from: 1/2/2023 to: 10/31/2023"],
             },
+            PROPERTY_TYPE_CRITERION,
             {"name": "RadarID", "value": ["P-SYNTHETIC-HISTORY"]},
         ],
         "fields": BUYER_TRANSFER_PROPERTY_FIELDS,
+        "preview_fields": ("RadarID",),
         "limit": 1,
         "start": 0,
         "mode": "historical_recording_range",
@@ -319,9 +421,11 @@ def test_recent_scope_hashes_only_the_original_canonical_payload() -> None:
             {"name": "TransferPublishedDate", "value": ["Last 7 Days"]},
             {"name": "TransferRecDate", "value": ["Last 30 Days"]},
             {"name": "isMostRecentMarketTransfer", "value": [1]},
+            PROPERTY_TYPE_CRITERION,
             {"name": "RadarID", "value": ["P-SYNTHETIC-HISTORY"]},
         ],
         "fields": BUYER_TRANSFER_PROPERTY_FIELDS,
+        "preview_fields": ("RadarID",),
         "limit": 1,
         "start": 0,
     }
@@ -354,6 +458,16 @@ def test_historical_contract_is_versioned_immutable_and_independently_hashed() -
     criterion_order = contract["criterion_order"]
     assert isinstance(criterion_order, tuple)
     assert "TransferPublishedDate" not in criterion_order
+    assert criterion_order == (
+        "State",
+        "County",
+        "Buyer",
+        "TransferRecDate",
+        "isMostRecentMarketTransfer",
+        "PropertyType",
+        "RadarID",
+    )
+    assert contract["preview_fields"] == ("RadarID",)
     date_contract = contract["recording_date_range"]
     assert isinstance(date_contract, Mapping)
     assert date_contract["criterion"] == "TransferRecDate"
@@ -370,6 +484,50 @@ def test_historical_contract_is_versioned_immutable_and_independently_hashed() -
     ).encode("ascii")
     assert fingerprint == hashlib.sha256(encoded).hexdigest()
     assert fingerprint != BUYER_TRANSFER_MATCH_CONTRACT["contract_fingerprint"]
+    assert fingerprint == (
+        # pragma: allowlist nextline secret
+        "HISTORICAL_CONTRACT_FINGERPRINT_0_4_2_PENDING"
+    )
+    assert fingerprint != HISTORICAL_CONTRACT_FINGERPRINT_0_4_1
+
+
+def test_historical_contract_keeps_every_value_the_theperrygroup_adapter_checks() -> (
+    None
+):
+    contract = BUYER_TRANSFER_HISTORICAL_MATCH_CONTRACT
+    assert type(contract) is MappingProxyType
+    assert contract["operation"] == "properties.search"
+    assert contract["method"] == "POST"
+    assert contract["path"] == "/v1/properties"
+    assert contract["relationship"] == "provider_buyer_criterion_property_match"
+    assert contract["contract_version"] == 1
+    assert contract["mode"] == "historical_recording_range"
+    assert contract["publication_window_values"] == ()
+    assert contract["recording_window_values"] == ()
+    assert contract["scope_fingerprint_policy"] == (
+        "bind_mode_contract_and_recording_boundaries"
+    )
+    limitations = contract["provider_limitations"]
+    assert type(limitations) is MappingProxyType
+    assert limitations["matched_transaction_identifier"] is None
+    assert limitations["matched_structured_grantees"] is None
+    assert limitations["transaction_party_boundaries"] is None
+    assert limitations["scalar_grantor_grantee_parsing"] is False
+    date_contract = contract["recording_date_range"]
+    assert type(date_contract) is MappingProxyType
+    assert date_contract["criterion"] == "TransferRecDate"
+    assert date_contract["boundary_type"] == "date"
+    assert date_contract["inclusive"] is True
+    assert date_contract["minimum_date"] == date.min.isoformat()
+    assert date_contract["maximum_date"] == date.max.isoformat()
+    assert date_contract["span_limit"] == "caller_authorization_policy"
+    assert date_contract["open_ended"] is False
+    criterion = contract["property_type_criterion"]
+    assert type(criterion) is MappingProxyType
+    assert criterion["purchase_0_live_probed"] is False
+    assert thaw(criterion) == thaw(
+        BUYER_TRANSFER_MATCH_CONTRACT["property_type_criterion"]
+    )
 
 
 def test_recent_contract_and_positional_criteria_remain_compatible() -> None:
@@ -388,9 +546,17 @@ def test_recent_contract_and_positional_criteria_remain_compatible() -> None:
         {"name": "TransferRecDate", "value": ["Last 30 Days"]},
         {"name": "isMostRecentMarketTransfer", "value": [1]},
     )
+    assert build_buyer_transfer_match_criteria(value)[6:] == (
+        PROPERTY_TYPE_CRITERION,
+        {"name": "RadarID", "value": ["P-SYNTHETIC-HISTORY"]},
+    )
     assert BUYER_TRANSFER_MATCH_CONTRACT["contract_fingerprint"] == (
         # pragma: allowlist nextline secret
-        "299cfaba5ddfc8337a290352433969f1f1363fa1a545080773761c2c99d2c8be"
+        "RECENT_CONTRACT_FINGERPRINT_0_4_2_PENDING"
+    )
+    assert (
+        BUYER_TRANSFER_MATCH_CONTRACT["contract_fingerprint"]
+        != RECENT_CONTRACT_FINGERPRINT_0_4_1
     )
     result = parse_buyer_transfer_match(historical_envelope(), criteria=value)
     assert (
@@ -501,6 +667,7 @@ def test_historical_property_reports_only_documented_residential_classification(
     property_type: str, residential: bool | None
 ) -> None:
     value = historical_property(property_type=property_type)
+    assert value.residential_basis is None
     assert value.is_residential is residential
     assert "SYNTHETIC-PARCEL" not in repr(value)
     assert "1 Synthetic Way" not in repr(value)
@@ -867,7 +1034,7 @@ def test_historical_preview_makes_one_bounded_mock_request() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         captured.append(request)
-        return httpx.Response(200, json=historical_envelope())
+        return httpx.Response(200, json=live_one_hit_radar_id_only_preview())
 
     client, http_client = make_client(handler)
     try:
@@ -882,16 +1049,18 @@ def test_historical_preview_makes_one_bounded_mock_request() -> None:
         == (BUYER_TRANSFER_HISTORICAL_MATCH_CONTRACT["contract_fingerprint"])
     )
     assert result.billing.status == "preview"
+    assert result.matched is True
     assert len(captured) == 1
     request = captured[0]
     assert request.method == "POST"
     assert request.url.path == "/v1/properties"
     assert request.url.params.multi_items() == [
-        ("Fields", ",".join(BUYER_TRANSFER_PROPERTY_FIELDS)),
+        ("Fields", "RadarID"),
         ("Limit", "1"),
         ("Start", "0"),
         ("Purchase", "0"),
     ]
+    assert request.url.params["Fields"] == ",".join(BUYER_TRANSFER_PREVIEW_FIELDS)
     assert json.loads(request.content) == {
         "Criteria": list(build_buyer_transfer_match_criteria(historical_criteria()))
     }
@@ -939,3 +1108,389 @@ def test_historical_paid_request_is_never_automatically_retried() -> None:
     finally:
         http_client.close()
     assert calls == 1
+
+
+def test_historical_paid_request_sends_every_field_with_the_same_criteria() -> None:
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(200, json=historical_paid_envelope())
+
+    client, http_client = make_client(handler, allow_charges=True)
+    try:
+        result = client.properties.historical_buyer_transfer_match(
+            criteria=historical_criteria(), purchase=True
+        )
+    finally:
+        http_client.close()
+
+    assert type(result) is HistoricalBuyerTransferMatchResult
+    assert result.billing.status == "charged"
+    assert result.billing.total_cost == Decimal("1")
+    assert len(captured) == 1
+    assert captured[0].url.params.multi_items() == [
+        ("Fields", ",".join(BUYER_TRANSFER_PROPERTY_FIELDS)),
+        ("Limit", "1"),
+        ("Start", "0"),
+        ("Purchase", "1"),
+    ]
+    assert json.loads(captured[0].content) == {
+        "Criteria": list(build_buyer_transfer_match_criteria(historical_criteria()))
+    }
+
+
+def test_historical_live_bare_zero_hit_preview_is_a_no_match() -> None:
+    value = historical_criteria()
+    result = parse_historical_buyer_transfer_match(
+        live_bare_zero_hit_preview(), criteria=value, purchase_requested=False
+    )
+
+    assert type(result) is HistoricalBuyerTransferMatchResult
+    assert result.matched is False
+    assert result.linkage is None
+    assert (
+        result.contract_fingerprint
+        == (BUYER_TRANSFER_HISTORICAL_MATCH_CONTRACT["contract_fingerprint"])
+    )
+    assert result.scope_fingerprint == buyer_transfer_scope_fingerprint(value)
+    billing = result.billing
+    assert type(billing) is BuyerTransferBillingEvidence
+    assert billing.purchase_requested is False
+    assert billing.status == "preview"
+    assert type(billing.total_cost) is Decimal
+    assert billing.total_cost == Decimal("0")
+    assert billing.currency is None
+    assert billing.quantity_free_remaining is None
+    assert billing.result_count == 0
+    assert billing.total_result_count == 0
+    assert billing.provider_metadata_omitted is True
+
+
+@pytest.mark.parametrize("purchase_requested", [True, None])
+def test_historical_live_bare_zero_hit_envelope_needs_metadata_unless_preview(
+    purchase_requested: bool | None,
+) -> None:
+    with pytest.raises(InvalidResponseError, match=r"\(required_envelope_fields\)"):
+        parse_historical_buyer_transfer_match(
+            live_bare_zero_hit_preview(),
+            criteria=historical_criteria(),
+            purchase_requested=purchase_requested,
+        )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"results": [], "facets": {}},
+        {"results": [], "nextPageToken": ""},
+        {"results": [], "maxDistanceMiles": 0},
+        {"results": [], "totalCost": 0},
+        {"results": [{"RadarID": "P-SYNTHETIC-HISTORY"}]},
+        {"results": None},
+    ],
+)
+def test_historical_other_partial_preview_envelopes_still_fail_closed(
+    payload: dict[str, object],
+) -> None:
+    with pytest.raises(InvalidResponseError, match=r"\(required_envelope_fields\)"):
+        parse_historical_buyer_transfer_match(
+            payload, criteria=historical_criteria(), purchase_requested=False
+        )
+
+
+def test_historical_live_one_hit_radar_id_only_preview_is_matched() -> None:
+    value = historical_criteria()
+    result = parse_historical_buyer_transfer_match(
+        live_one_hit_radar_id_only_preview(),
+        criteria=value,
+        purchase_requested=False,
+    )
+
+    assert type(result) is HistoricalBuyerTransferMatchResult
+    assert result.matched is True
+    assert result.linkage is not None
+    assert type(result.linkage) is HistoricalBuyerTransferLinkage
+    property_value = result.linkage.property
+    assert type(property_value) is HistoricalBuyerTransferProperty
+    assert property_value.radar_id == "P-SYNTHETIC-HISTORY"
+    assert property_value.returned_fields == ("RadarID",)
+    assert property_value.fips is None
+    assert property_value.zip_five is None
+    assert property_value.property_type is None
+    assert property_value.is_residential is True
+    assert property_value.residential_basis == "property_type_criterion"
+    assert result.scope_fingerprint == buyer_transfer_scope_fingerprint(value)
+    assert result.linkage.scope_fingerprint == result.scope_fingerprint
+    billing = result.billing
+    assert billing.purchase_requested is False
+    assert billing.status == "preview"
+    assert billing.total_cost == Decimal("0")
+    assert billing.currency is None
+    assert billing.quantity_free_remaining is None
+    assert billing.result_count == 0
+    assert billing.total_result_count == 1
+    assert billing.provider_metadata_omitted is False
+    rendered = repr(result)
+    assert "P-SYNTHETIC-HISTORY" not in rendered
+    assert "Synthetic Historical Buyer" not in rendered
+
+
+@pytest.mark.parametrize("purchase_requested", [True, None])
+def test_historical_live_one_hit_preview_counts_fail_paid_and_unknown_parses(
+    purchase_requested: bool | None,
+) -> None:
+    with pytest.raises(InvalidResponseError, match=r"\(result_count_mismatch\)"):
+        parse_historical_buyer_transfer_match(
+            live_one_hit_radar_id_only_preview(),
+            criteria=historical_criteria(),
+            purchase_requested=purchase_requested,
+        )
+
+
+def test_historical_live_withheld_record_preview_fails_closed() -> None:
+    with pytest.raises(
+        InvalidResponseError, match=r"\(preview_record_withheld\)"
+    ) as caught:
+        parse_historical_buyer_transfer_match(
+            live_withheld_record_preview(),
+            criteria=historical_criteria(),
+            purchase_requested=False,
+        )
+    assert "9866" not in str(caught.value)
+    assert caught.value.__cause__ is None
+
+
+@pytest.mark.parametrize("purchase_requested", [True, None])
+def test_historical_live_withheld_record_shape_fails_paid_and_unknown_parses(
+    purchase_requested: bool | None,
+) -> None:
+    payload = live_withheld_record_preview()
+    if purchase_requested is True:
+        del payload["quantityFreeRemaining"]
+    with pytest.raises(InvalidResponseError, match=r"\(ambiguous_total_result_count\)"):
+        parse_historical_buyer_transfer_match(
+            payload,
+            criteria=historical_criteria(),
+            purchase_requested=purchase_requested,
+        )
+
+
+@pytest.mark.parametrize("with_record", [True, False])
+@pytest.mark.parametrize("purchase_requested", [False, True, None])
+def test_historical_live_total_result_count_two_preview_fails_closed(
+    with_record: bool, purchase_requested: bool | None
+) -> None:
+    payload: dict[str, object] = {
+        "results": [{"RadarID": "P-SYNTHETIC-HISTORY"}] if with_record else [],
+        "totalCost": 0,
+        "resultCount": 0,
+        "totalResultCount": 2,
+    }
+    with pytest.raises(InvalidResponseError, match=r"\(total_result_count\)"):
+        parse_historical_buyer_transfer_match(
+            payload,
+            criteria=historical_criteria(),
+            purchase_requested=purchase_requested,
+        )
+
+
+@pytest.mark.parametrize(
+    ("total_cost", "expected"),
+    [
+        (0, Decimal("0")),
+        (3, Decimal("3")),
+        (10**64 - 1, Decimal(10**64 - 1)),
+        (0.0, Decimal("0.0")),
+        (0.1, Decimal("0.1")),
+        (2.5, Decimal("2.5")),
+        (1e16, Decimal("1E+16")),
+        ("0", Decimal("0")),
+        ("0.50", Decimal("0.50")),
+        ("1" * 64, Decimal("1" * 64)),
+    ],
+)
+@pytest.mark.parametrize("purchase_requested", [False, True, None])
+def test_historical_live_total_cost_json_int_float_and_decimal_string_are_accepted(
+    total_cost: object, expected: Decimal, purchase_requested: bool | None
+) -> None:
+    payload = {
+        **historical_envelope(purchase=purchase_requested is True),
+        "totalCost": total_cost,
+    }
+    result = parse_historical_buyer_transfer_match(
+        payload, criteria=historical_criteria(), purchase_requested=purchase_requested
+    )
+
+    assert type(result.billing.total_cost) is Decimal
+    assert result.billing.total_cost == expected
+
+
+@pytest.mark.parametrize(
+    "total_cost",
+    [
+        True,
+        False,
+        None,
+        float("nan"),
+        float("inf"),
+        -1,
+        -0.0,
+        -2.5,
+        10**64,
+        1e64,
+        1e-63,
+        "-1.00",
+        "1" * 65,
+        "1e3",
+        Decimal("0"),
+        IntegerSubclass(1),
+        StringSubclass("0"),
+        [0],
+    ],
+)
+@pytest.mark.parametrize("purchase_requested", [False, True, None])
+def test_historical_live_total_cost_rejects_bool_non_finite_negative_and_overlong(
+    total_cost: object, purchase_requested: bool | None
+) -> None:
+    payload = {
+        **historical_envelope(purchase=purchase_requested is True),
+        "totalCost": total_cost,
+    }
+    with pytest.raises(InvalidResponseError, match=r"\(total_cost\)"):
+        parse_historical_buyer_transfer_match(
+            payload,
+            criteria=historical_criteria(),
+            purchase_requested=purchase_requested,
+        )
+
+
+@pytest.mark.parametrize("property_type", RESIDENTIAL_PROPERTY_TYPES)
+@pytest.mark.parametrize("purchase_requested", [False, True, None])
+def test_historical_returned_residential_property_type_records_its_basis(
+    property_type: str, purchase_requested: bool | None
+) -> None:
+    payload = {
+        **historical_envelope(purchase=purchase_requested is True),
+        "results": [{"RadarID": "P-SYNTHETIC-HISTORY", "PType": property_type}],
+    }
+    result = parse_historical_buyer_transfer_match(
+        payload, criteria=historical_criteria(), purchase_requested=purchase_requested
+    )
+
+    assert result.linkage is not None
+    assert result.linkage.property.property_type == property_type
+    assert result.linkage.property.is_residential is True
+    assert result.linkage.property.residential_basis == "property_type"
+
+
+@pytest.mark.parametrize("property_type", NON_RESIDENTIAL_PROPERTY_TYPES)
+@pytest.mark.parametrize("purchase_requested", [False, True, None])
+def test_historical_returned_property_type_outside_the_criterion_fails_closed(
+    property_type: str, purchase_requested: bool | None
+) -> None:
+    payload = {
+        **historical_envelope(purchase=purchase_requested is True),
+        "results": [{"RadarID": "P-SYNTHETIC-HISTORY", "PType": property_type}],
+    }
+    with pytest.raises(
+        InvalidResponseError, match=r"\(property_type_outside_criterion\)"
+    ) as caught:
+        parse_historical_buyer_transfer_match(
+            payload,
+            criteria=historical_criteria(),
+            purchase_requested=purchase_requested,
+        )
+    assert property_type not in str(caught.value)
+
+
+def test_historical_property_type_criterion_basis_classifies_without_a_ptype() -> None:
+    value = historical_property(
+        returned_fields=FIELDS_WITHOUT_PROPERTY_TYPE,
+        property_type=None,
+        residential_basis="property_type_criterion",
+    )
+
+    assert value.is_residential is True
+    assert "residential_basis='property_type_criterion'" in repr(value)
+    assert "SYNTHETIC-PARCEL" not in repr(value)
+    assert historical_property(residential_basis="property_type").is_residential
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"residential_basis": "property_type_criterion"},
+        {
+            "returned_fields": FIELDS_WITHOUT_PROPERTY_TYPE,
+            "property_type": None,
+            "residential_basis": "property_type",
+        },
+        {"property_type": "Commercial", "residential_basis": "property_type"},
+        {"property_type": "Unknown", "residential_basis": "property_type"},
+        {"residential_basis": "synthetic_guess"},
+        {"residential_basis": False},
+    ],
+)
+def test_historical_residential_basis_rejects_contradictory_manual_states(
+    changes: dict[str, object],
+) -> None:
+    with pytest.raises(ValueError, match="residential_basis"):
+        historical_property(**changes)
+
+
+def test_historical_preview_and_paid_results_bind_the_same_scope_fingerprint() -> None:
+    value = historical_criteria()
+    expected = buyer_transfer_scope_fingerprint(value)
+    preview = parse_historical_buyer_transfer_match(
+        live_one_hit_radar_id_only_preview(),
+        criteria=value,
+        purchase_requested=False,
+    )
+    paid = parse_historical_buyer_transfer_match(
+        historical_paid_envelope(), criteria=value, purchase_requested=True
+    )
+    bare = parse_historical_buyer_transfer_match(
+        live_bare_zero_hit_preview(), criteria=value, purchase_requested=False
+    )
+
+    for result in (preview, paid):
+        assert result.scope_fingerprint == expected
+        assert result.linkage is not None
+        assert result.linkage.scope_fingerprint == expected
+    assert bare.scope_fingerprint == expected
+    assert paid.linkage is not None
+    assert paid.linkage.property.residential_basis == "property_type"
+    assert paid.linkage.property.zip_five == "00501"
+
+
+def test_historical_preview_invariants_follow_the_returned_record() -> None:
+    preview = parse_historical_buyer_transfer_match(
+        live_one_hit_radar_id_only_preview(),
+        criteria=historical_criteria(),
+        purchase_requested=False,
+    )
+    bare = parse_historical_buyer_transfer_match(
+        live_bare_zero_hit_preview(),
+        criteria=historical_criteria(),
+        purchase_requested=False,
+    )
+    assert preview.linkage is not None
+
+    with pytest.raises(ValueError, match="presence"):
+        replace(preview, linkage=None)
+    with pytest.raises(ValueError, match="presence"):
+        replace(bare, linkage=preview.linkage)
+    with pytest.raises(ValueError, match="provider_metadata_omitted"):
+        replace(bare.billing, total_result_count=1)
+
+
+def test_historical_contract_no_longer_matches_the_0_4_1_fingerprint() -> None:
+    result = parse_historical_buyer_transfer_match(
+        live_one_hit_radar_id_only_preview(),
+        criteria=historical_criteria(),
+        purchase_requested=False,
+    )
+
+    with pytest.raises(ValueError, match="contract_fingerprint"):
+        replace(result, contract_fingerprint=HISTORICAL_CONTRACT_FINGERPRINT_0_4_1)

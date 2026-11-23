@@ -1,32 +1,59 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+import socket
+from collections.abc import Callable, Mapping
+from datetime import date
+from decimal import Decimal
+from types import MappingProxyType
+from typing import NoReturn
 
 import httpx
 import pytest
 
 from property_radar import (
+    BUYER_TRANSFER_HISTORICAL_MATCH_CONTRACT,
+    BUYER_TRANSFER_MATCH_CONTRACT,
+    BUYER_TRANSFER_PROPERTY_FIELDS,
     PROPERTY_PERSON_IDENTITY_FIELDS,
     TRANSACTION_HISTORY_FIELDS,
+    BuyerTransferMatchCriteria,
+    BuyerTransferMatchResult,
+    BuyerTransferRecordingDateRange,
+    HistoricalBuyerTransferMatchResult,
     PropertyRadarClient,
+    buyer_transfer_scope_fingerprint,
 )
+from property_radar.buyer_transfer import BUYER_TRANSFER_PREVIEW_FIELDS
 from property_radar.exceptions import (
     BadRequestError,
     ChargeNotAllowedError,
     ConfigurationError,
     InvalidResponseError,
     NotFoundError,
+    RateLimitError,
     ServerError,
 )
 from property_radar.types import Criterion, ResponseEnvelope
 
 Handler = Callable[[httpx.Request], httpx.Response]
 Operation = Callable[[PropertyRadarClient], ResponseEnvelope]
+BuyerMatchResult = BuyerTransferMatchResult | HistoricalBuyerTransferMatchResult
 
 CRITERIA: list[Criterion] = [
     {"name": "RadarID", "value": ["P-SYNTHETIC"]},
 ]
+
+
+@pytest.fixture(autouse=True)
+def _deny_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    def refuse(*_: object, **__: object) -> NoReturn:
+        raise AssertionError("synthetic tests must not open a network connection")
+
+    monkeypatch.setattr(socket.socket, "connect", refuse)
+    monkeypatch.setattr(socket.socket, "connect_ex", refuse)
+    monkeypatch.setattr(socket, "create_connection", refuse)
+    monkeypatch.setattr(socket, "getaddrinfo", refuse)
 
 
 def make_client(
@@ -825,3 +852,538 @@ def test_property_get_error_is_propagated() -> None:
         client.properties.get("P-MISSING")
 
     http_client.close()
+
+
+# Buyer-transfer match through the typed resource methods (0.4.2 live shapes).
+
+BUYER_MODES = ("recent", "historical")
+PROPERTY_TYPE_CRITERION: Criterion = {
+    "name": "PropertyType",
+    "value": [{"name": "PType", "value": ["SFR", "CND", "MFR", "APT", "RES"]}],
+}
+EXPECTED_BUYER_CRITERIA: dict[str, list[Criterion]] = {
+    "recent": [
+        {"name": "State", "value": ["UT"]},
+        {"name": "County", "value": [49035]},
+        {"name": "Buyer", "value": ["Synthetic Adapter Buyer"]},
+        {"name": "TransferPublishedDate", "value": ["Last 7 Days"]},
+        PROPERTY_TYPE_CRITERION,
+        {"name": "RadarID", "value": ["P-SYNTHETIC"]},
+    ],
+    "historical": [
+        {"name": "State", "value": ["UT"]},
+        {"name": "County", "value": [49035]},
+        {"name": "Buyer", "value": ["Synthetic Adapter Buyer"]},
+        {"name": "TransferRecDate", "value": ["from: 1/2/2023 to: 10/31/2023"]},
+        PROPERTY_TYPE_CRITERION,
+        {"name": "RadarID", "value": ["P-SYNTHETIC"]},
+    ],
+}
+PREVIEW_PARAMS = [
+    ("Fields", "RadarID"),
+    ("Limit", "1"),
+    ("Start", "0"),
+    ("Purchase", "0"),
+]
+PAID_PARAMS = [
+    (
+        "Fields",
+        "RadarID,PType,Address,City,State,ZipFive,County,FIPS,APN,Latitude,Longitude",
+    ),
+    ("Limit", "1"),
+    ("Start", "0"),
+    ("Purchase", "1"),
+]
+
+
+def buyer_criteria(mode: str) -> BuyerTransferMatchCriteria:
+    # Built the way the theperrygroup adapter builds them: keywords only.
+    if mode == "historical":
+        return BuyerTransferMatchCriteria(
+            buyer_name="Synthetic Adapter Buyer",
+            radar_id="P-SYNTHETIC",
+            state_code="UT",
+            county_fips="49035",
+            publication_window=None,
+            recording_date_range=BuyerTransferRecordingDateRange(
+                start=date(2023, 1, 2), end=date(2023, 10, 31)
+            ),
+        )
+    return BuyerTransferMatchCriteria(
+        buyer_name="Synthetic Adapter Buyer",
+        radar_id="P-SYNTHETIC",
+        state_code="UT",
+        county_fips="49035",
+    )
+
+
+def call_buyer_match(
+    client: PropertyRadarClient, mode: str, *, purchase: bool = False
+) -> BuyerMatchResult:
+    criteria = buyer_criteria(mode)
+    if mode == "historical":
+        return client.properties.historical_buyer_transfer_match(
+            criteria=criteria, purchase=purchase
+        )
+    return client.properties.buyer_transfer_match(criteria=criteria, purchase=purchase)
+
+
+def run_buyer_match(
+    mode: str,
+    responses: list[httpx.Response],
+    *,
+    purchase: bool = False,
+    allow_charges: bool = False,
+    max_retries: int = 0,
+) -> tuple[BuyerMatchResult, list[httpx.Request]]:
+    captured: list[httpx.Request] = []
+    pending = list(responses)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return pending.pop(0)
+
+    client, http_client = make_client(
+        handler, allow_charges=allow_charges, max_retries=max_retries
+    )
+    try:
+        result = call_buyer_match(client, mode, purchase=purchase)
+    finally:
+        http_client.close()
+    return result, captured
+
+
+def live_bare_zero_hit_preview() -> dict[str, object]:
+    # Exact live 0-hit POST /v1/properties?Purchase=0 body: no metadata at all.
+    return {"results": []}
+
+
+def live_one_hit_radar_id_only_preview() -> dict[str, object]:
+    # Live 1-hit Fields=RadarID preview shape with a synthetic RadarID.
+    return {
+        "results": [{"RadarID": "P-SYNTHETIC"}],
+        "totalCost": 0,
+        "resultCount": 0,
+        "totalResultCount": 1,
+    }
+
+
+def live_withheld_record_preview() -> dict[str, object]:
+    return {
+        "results": [],
+        "totalCost": 0,
+        "resultCount": 0,
+        "totalResultCount": 1,
+        "quantityFreeRemaining": 9866,
+    }
+
+
+def paid_buyer_envelope(mode: str, total_cost: object = 1) -> dict[str, object]:
+    record: dict[str, object] = {
+        "RadarID": "P-SYNTHETIC",
+        "PType": "Single Family",
+        "ZipFive": "84101" if mode == "historical" else 84101,
+        "FIPS": "49035",
+    }
+    return {
+        "results": [record],
+        "totalCost": total_cost,
+        "resultCount": 1,
+        "totalResultCount": 1,
+    }
+
+
+def adapter_precheck(result: BuyerMatchResult, *, mode: str) -> str:
+    # Mirrors the reads of theperrygroup's non-billable precheck.
+    criteria = buyer_criteria(mode)
+    if mode == "historical":
+        if type(result) is not HistoricalBuyerTransferMatchResult:
+            return "reject_result_type"
+        contract = BUYER_TRANSFER_HISTORICAL_MATCH_CONTRACT
+    else:
+        if type(result) is not BuyerTransferMatchResult:
+            return "reject_result_type"
+        contract = BUYER_TRANSFER_MATCH_CONTRACT
+    if result.contract_fingerprint != contract["contract_fingerprint"]:
+        return "reject_contract_fingerprint"
+    expected_scope = buyer_transfer_scope_fingerprint(criteria)
+    if result.scope_fingerprint != expected_scope:
+        return "reject_scope_fingerprint"
+    billing = result.billing
+    if (
+        billing.purchase_requested is not False
+        or billing.status != "preview"
+        or billing.total_cost != Decimal("0")
+        or billing.currency is not None
+    ):
+        return "reject_billing"
+    if not result.matched:
+        return "no_match"
+    linkage = result.linkage
+    if linkage is None or linkage.scope_fingerprint != expected_scope:
+        return "reject_linkage_scope"
+    if linkage.property.radar_id != criteria.radar_id:
+        return "reject_radar_id"
+    if linkage.property.fips is not None and (
+        linkage.property.fips != criteria.county_fips
+    ):
+        return "reject_fips"
+    if linkage.property.is_residential is True:
+        return "paid_claim_allowed"
+    if linkage.property.is_residential is False:
+        return "non_residential"
+    return "residential_unknown"
+
+
+@pytest.mark.parametrize("mode", BUYER_MODES)
+def test_buyer_preview_sends_radar_id_only_with_property_type_before_radar_id(
+    mode: str,
+) -> None:
+    result, captured = run_buyer_match(
+        mode, [httpx.Response(200, json=live_one_hit_radar_id_only_preview())]
+    )
+
+    assert result.matched is True
+    assert len(captured) == 1
+    request = captured[0]
+    assert request.method == "POST"
+    assert request.url.path == "/v1/properties"
+    assert request.url.params.multi_items() == PREVIEW_PARAMS
+    assert request.url.params["Fields"] == ",".join(BUYER_TRANSFER_PREVIEW_FIELDS)
+    body = json.loads(request.content)
+    assert body == {"Criteria": EXPECTED_BUYER_CRITERIA[mode]}
+    assert body["Criteria"][-2] == PROPERTY_TYPE_CRITERION
+    assert body["Criteria"][-1] == {"name": "RadarID", "value": ["P-SYNTHETIC"]}
+
+
+@pytest.mark.parametrize("mode", BUYER_MODES)
+def test_buyer_paid_call_sends_every_property_field_with_the_same_criteria(
+    mode: str,
+) -> None:
+    _, preview_requests = run_buyer_match(
+        mode, [httpx.Response(200, json=live_one_hit_radar_id_only_preview())]
+    )
+    paid, paid_requests = run_buyer_match(
+        mode,
+        [httpx.Response(200, json=paid_buyer_envelope(mode))],
+        purchase=True,
+        allow_charges=True,
+    )
+
+    assert paid.billing.status == "charged"
+    assert paid.billing.purchase_requested is True
+    assert paid.billing.total_cost == Decimal("1")
+    assert len(paid_requests) == 1
+    request = paid_requests[0]
+    assert request.method == "POST"
+    assert request.url.path == "/v1/properties"
+    assert request.url.params.multi_items() == PAID_PARAMS
+    assert request.url.params["Fields"] == ",".join(BUYER_TRANSFER_PROPERTY_FIELDS)
+    assert json.loads(request.content) == {"Criteria": EXPECTED_BUYER_CRITERIA[mode]}
+    assert json.loads(request.content) == json.loads(preview_requests[0].content)
+
+
+@pytest.mark.parametrize("mode", BUYER_MODES)
+def test_buyer_purchase_still_needs_allow_charges_before_the_network(
+    mode: str,
+) -> None:
+    calls = 0
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json=paid_buyer_envelope(mode))
+
+    client, http_client = make_client(handler, allow_charges=False, max_retries=3)
+    try:
+        with pytest.raises(ChargeNotAllowedError):
+            call_buyer_match(client, mode, purchase=True)
+    finally:
+        http_client.close()
+    assert calls == 0
+
+
+@pytest.mark.parametrize(
+    ("status_code", "error"),
+    [(429, RateLimitError), (500, ServerError), (503, ServerError)],
+)
+@pytest.mark.parametrize("mode", BUYER_MODES)
+def test_buyer_paid_request_is_never_retried(
+    mode: str, status_code: int, error: type[Exception]
+) -> None:
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        assert request.url.params["Purchase"] == "1"
+        return httpx.Response(
+            status_code,
+            headers={"Retry-After": "0"},
+            json={"message": "synthetic failure"},
+        )
+
+    client, http_client = make_client(handler, allow_charges=True, max_retries=3)
+    try:
+        with pytest.raises(error):
+            call_buyer_match(client, mode, purchase=True)
+    finally:
+        http_client.close()
+    assert calls == 1
+
+
+@pytest.mark.parametrize("mode", BUYER_MODES)
+def test_buyer_preview_request_keeps_its_safe_retry(mode: str) -> None:
+    result, captured = run_buyer_match(
+        mode,
+        [
+            httpx.Response(
+                503, headers={"Retry-After": "0"}, json={"message": "synthetic"}
+            ),
+            httpx.Response(200, json=live_one_hit_radar_id_only_preview()),
+        ],
+        max_retries=1,
+    )
+
+    assert result.matched is True
+    assert len(captured) == 2
+    assert all(request.url.params["Purchase"] == "0" for request in captured)
+    assert all(request.url.params["Fields"] == "RadarID" for request in captured)
+
+
+@pytest.mark.parametrize("mode", BUYER_MODES)
+def test_buyer_live_one_hit_radar_id_only_preview_is_a_residential_match(
+    mode: str,
+) -> None:
+    result, _ = run_buyer_match(
+        mode, [httpx.Response(200, json=live_one_hit_radar_id_only_preview())]
+    )
+
+    assert result.matched is True
+    assert result.linkage is not None
+    property_value = result.linkage.property
+    assert property_value.radar_id == "P-SYNTHETIC"
+    assert property_value.fips is None
+    assert property_value.property_type is None
+    assert property_value.is_residential is True
+    assert property_value.residential_basis == "property_type_criterion"
+    assert result.billing.total_cost == Decimal("0")
+    assert result.billing.result_count == 0
+    assert result.billing.total_result_count == 1
+
+
+@pytest.mark.parametrize("mode", BUYER_MODES)
+def test_buyer_live_bare_zero_hit_preview_is_a_no_match(mode: str) -> None:
+    result, captured = run_buyer_match(
+        mode, [httpx.Response(200, json=live_bare_zero_hit_preview())]
+    )
+
+    assert len(captured) == 1
+    assert result.matched is False
+    assert result.linkage is None
+    assert result.billing.provider_metadata_omitted is True
+    assert result.billing.quantity_free_remaining is None
+
+
+@pytest.mark.parametrize(
+    ("payload", "reason"),
+    [
+        (live_withheld_record_preview(), "preview_record_withheld"),
+        (
+            {"results": [], "totalCost": 0, "resultCount": 0, "totalResultCount": 2},
+            "total_result_count",
+        ),
+        (
+            {
+                "results": [{"RadarID": "P-SYNTHETIC"}],
+                "totalCost": 0,
+                "resultCount": 0,
+                "totalResultCount": 2,
+            },
+            "total_result_count",
+        ),
+    ],
+)
+@pytest.mark.parametrize("mode", BUYER_MODES)
+def test_buyer_withheld_and_multi_match_previews_fail_closed(
+    mode: str, payload: dict[str, object], reason: str
+) -> None:
+    with pytest.raises(InvalidResponseError, match=rf"\({reason}\)") as caught:
+        run_buyer_match(mode, [httpx.Response(200, json=payload)])
+    assert "9866" not in str(caught.value)
+    assert "P-SYNTHETIC" not in str(caught.value)
+
+
+@pytest.mark.parametrize("mode", BUYER_MODES)
+def test_buyer_bare_envelope_on_a_paid_call_fails_closed(mode: str) -> None:
+    with pytest.raises(InvalidResponseError, match=r"\(required_envelope_fields\)"):
+        run_buyer_match(
+            mode,
+            [httpx.Response(200, json=live_bare_zero_hit_preview())],
+            purchase=True,
+            allow_charges=True,
+        )
+
+
+@pytest.mark.parametrize(
+    ("total_cost", "expected"),
+    [
+        (0, Decimal("0")),
+        (2, Decimal("2")),
+        (0.25, Decimal("0.25")),
+        (1.0, Decimal("1.0")),
+        ("3.50", Decimal("3.50")),
+    ],
+)
+@pytest.mark.parametrize("mode", BUYER_MODES)
+def test_buyer_total_cost_int_float_and_decimal_string_through_the_resource(
+    mode: str, total_cost: object, expected: Decimal
+) -> None:
+    paid, _ = run_buyer_match(
+        mode,
+        [httpx.Response(200, json=paid_buyer_envelope(mode, total_cost))],
+        purchase=True,
+        allow_charges=True,
+    )
+    preview, _ = run_buyer_match(
+        mode,
+        [
+            httpx.Response(
+                200,
+                json={**live_one_hit_radar_id_only_preview(), "totalCost": total_cost},
+            )
+        ],
+    )
+
+    assert type(paid.billing.total_cost) is Decimal
+    assert paid.billing.total_cost == expected
+    assert preview.billing.total_cost == expected
+
+
+@pytest.mark.parametrize("total_cost", [True, None, -1, -0.0, float("nan"), "1e3"])
+@pytest.mark.parametrize("mode", BUYER_MODES)
+def test_buyer_invalid_total_cost_through_the_resource_fails_closed(
+    mode: str, total_cost: object
+) -> None:
+    with pytest.raises(InvalidResponseError, match=r"\(total_cost\)"):
+        run_buyer_match(
+            mode,
+            [httpx.Response(200, json=paid_buyer_envelope(mode, total_cost))],
+            purchase=True,
+            allow_charges=True,
+        )
+
+
+@pytest.mark.parametrize("property_type", ["Commercial", "Land", "Unknown"])
+@pytest.mark.parametrize("mode", BUYER_MODES)
+def test_buyer_returned_ptype_outside_the_residential_names_fails_closed(
+    mode: str, property_type: str
+) -> None:
+    payload = paid_buyer_envelope(mode)
+    payload["results"] = [{"RadarID": "P-SYNTHETIC", "PType": property_type}]
+    with pytest.raises(
+        InvalidResponseError, match=r"\(property_type_outside_criterion\)"
+    ):
+        run_buyer_match(
+            mode,
+            [httpx.Response(200, json=payload)],
+            purchase=True,
+            allow_charges=True,
+        )
+
+
+@pytest.mark.parametrize("mode", BUYER_MODES)
+def test_buyer_scope_fingerprint_binds_the_preview_and_the_paid_result(
+    mode: str,
+) -> None:
+    expected = buyer_transfer_scope_fingerprint(buyer_criteria(mode))
+    preview, _ = run_buyer_match(
+        mode, [httpx.Response(200, json=live_one_hit_radar_id_only_preview())]
+    )
+    paid, _ = run_buyer_match(
+        mode,
+        [httpx.Response(200, json=paid_buyer_envelope(mode))],
+        purchase=True,
+        allow_charges=True,
+    )
+    bare, _ = run_buyer_match(
+        mode, [httpx.Response(200, json=live_bare_zero_hit_preview())]
+    )
+
+    for result in (preview, paid):
+        assert result.scope_fingerprint == expected
+        assert result.linkage is not None
+        assert result.linkage.scope_fingerprint == expected
+    assert bare.scope_fingerprint == expected
+    assert paid.linkage is not None
+    assert paid.linkage.property.residential_basis == "property_type"
+    assert paid.linkage.property.is_residential is True
+
+
+@pytest.mark.parametrize("mode", BUYER_MODES)
+def test_adapter_precheck_reads_on_the_live_one_hit_preview(mode: str) -> None:
+    result, _ = run_buyer_match(
+        mode, [httpx.Response(200, json=live_one_hit_radar_id_only_preview())]
+    )
+
+    billing = result.billing
+    assert billing.purchase_requested is False
+    assert billing.status == "preview"
+    assert billing.total_cost == Decimal("0")
+    assert billing.currency is None
+    assert result.matched is True
+    assert result.linkage is not None
+    assert result.linkage.property.is_residential is True
+    assert adapter_precheck(result, mode=mode) == "paid_claim_allowed"
+
+
+@pytest.mark.parametrize("mode", BUYER_MODES)
+def test_adapter_precheck_reads_on_the_live_bare_zero_hit_preview(mode: str) -> None:
+    result, _ = run_buyer_match(
+        mode, [httpx.Response(200, json=live_bare_zero_hit_preview())]
+    )
+
+    billing = result.billing
+    assert billing.purchase_requested is False
+    assert billing.status == "preview"
+    assert billing.total_cost == Decimal("0")
+    assert billing.currency is None
+    assert result.matched is False
+    assert adapter_precheck(result, mode=mode) == "no_match"
+
+
+@pytest.mark.parametrize("mode", BUYER_MODES)
+def test_adapter_precheck_never_allows_a_paid_claim_on_a_paid_result(
+    mode: str,
+) -> None:
+    paid, _ = run_buyer_match(
+        mode,
+        [httpx.Response(200, json=paid_buyer_envelope(mode))],
+        purchase=True,
+        allow_charges=True,
+    )
+
+    assert adapter_precheck(paid, mode=mode) == "reject_billing"
+
+
+@pytest.mark.parametrize(
+    "contract",
+    [BUYER_TRANSFER_MATCH_CONTRACT, BUYER_TRANSFER_HISTORICAL_MATCH_CONTRACT],
+)
+def test_buyer_contracts_keep_the_values_the_adapter_checks(
+    contract: Mapping[str, object],
+) -> None:
+    assert type(contract) is MappingProxyType
+    assert contract["operation"] == "properties.search"
+    assert contract["method"] == "POST"
+    assert contract["path"] == "/v1/properties"
+    assert contract["relationship"] == "provider_buyer_criterion_property_match"
+    limitations = contract["provider_limitations"]
+    assert type(limitations) is MappingProxyType
+    assert limitations["matched_transaction_identifier"] is None
+    assert limitations["matched_structured_grantees"] is None
+    assert limitations["transaction_party_boundaries"] is None
+    assert limitations["scalar_grantor_grantee_parsing"] is False
+    fingerprint = contract["contract_fingerprint"]
+    assert type(fingerprint) is str
+    assert len(fingerprint) == 64
