@@ -400,6 +400,10 @@ def test_historical_scope_hashes_mode_contract_and_iso_recording_boundaries() ->
     assert buyer_transfer_scope_fingerprint(historical_criteria()) == (
         hashlib.sha256(encoded).hexdigest()
     )
+    assert buyer_transfer_scope_fingerprint(historical_criteria()) == (
+        # pragma: allowlist nextline secret
+        "53ab93b32c9db877a650f3fb8af8ea2c2a0d928a1ba8997de84b763a16f34423"
+    )
 
 
 def test_recent_scope_hashes_only_the_original_canonical_payload() -> None:
@@ -434,6 +438,10 @@ def test_recent_scope_hashes_only_the_original_canonical_payload() -> None:
     ).encode("ascii")
     assert (
         buyer_transfer_scope_fingerprint(value) == hashlib.sha256(encoded).hexdigest()
+    )
+    assert buyer_transfer_scope_fingerprint(value) == (
+        # pragma: allowlist nextline secret
+        "c7fcc5dcf0b151c8713b78887cf6452f32ebbc078a91ba54f73abab938db63b9"
     )
 
 
@@ -486,7 +494,7 @@ def test_historical_contract_is_versioned_immutable_and_independently_hashed() -
     assert fingerprint != BUYER_TRANSFER_MATCH_CONTRACT["contract_fingerprint"]
     assert fingerprint == (
         # pragma: allowlist nextline secret
-        "HISTORICAL_CONTRACT_FINGERPRINT_0_4_2_PENDING"
+        "ba879d4c9cf0e6c6ce662cd7bb04c7bf6d794435c5e0e98285ac14732bd47bb2"
     )
     assert fingerprint != HISTORICAL_CONTRACT_FINGERPRINT_0_4_1
 
@@ -552,7 +560,7 @@ def test_recent_contract_and_positional_criteria_remain_compatible() -> None:
     )
     assert BUYER_TRANSFER_MATCH_CONTRACT["contract_fingerprint"] == (
         # pragma: allowlist nextline secret
-        "RECENT_CONTRACT_FINGERPRINT_0_4_2_PENDING"
+        "0406f8ca5636c36eb834b273a4bc401293d52a91d34854874ad790a6edb12eeb"
     )
     assert (
         BUYER_TRANSFER_MATCH_CONTRACT["contract_fingerprint"]

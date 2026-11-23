@@ -271,7 +271,7 @@ def test_contract_is_current_deeply_immutable_and_fingerprinted() -> None:
     assert fingerprint == hashlib.sha256(encoded).hexdigest()
     assert fingerprint == (
         # pragma: allowlist nextline secret
-        "RECENT_CONTRACT_FINGERPRINT_0_4_2_PENDING"
+        "0406f8ca5636c36eb834b273a4bc401293d52a91d34854874ad790a6edb12eeb"
     )
     assert fingerprint != RECENT_CONTRACT_FINGERPRINT_0_4_1
 
