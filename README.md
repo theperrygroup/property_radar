@@ -15,13 +15,19 @@ An unofficial, typed Python client for the
 
 ## Status
 
-Version `0.4.1` retains the historical interfaces introduced in `0.4.0` and
-updates the publisher to support their package metadata. The base catalog covers all
-37 operations in official API `5.2.0.0`; the new historical Buyer-criterion
-property/location interface binds separate official API `5.3.1.0` evidence.
-The existing recent-query contract, fingerprint, and types remain unchanged.
-The historical transaction interface separates preview quotes from paid rows,
-with explicit date, document, and row-count bounds before billing.
+Version `0.4.2` fixes four response and request mismatches that live
+PropertyRadar responses showed in `0.4.1`. `totalCost` is accepted as a JSON
+integer, a finite JSON number or a decimal string. The bare `{"results": []}`
+envelope of a zero-hit preview is accepted. Preview counts follow the provider
+(`resultCount` counts purchased rows, `totalResultCount` counts matches).
+Buyer-transfer previews request only the free `RadarID` field and restrict the
+search to residential property types with the official `PropertyType`
+criterion. The four typed contracts get new fingerprints; see the changelog.
+The base catalog covers all 37 operations in official API `5.2.0.0`; the
+historical Buyer-criterion property/location interface binds separate official
+API `5.3.1.0` evidence. The historical transaction interface separates preview
+quotes from paid rows, with explicit date, document, and row-count bounds
+before billing.
 Releases are built once and published through the configured PyPI Trusted Publisher.
 
 ## Installation
@@ -65,8 +71,16 @@ person-to-transaction linkage.
 `client.properties.buyer_transfer_match()` builds a fixed
 `POST /v1/properties` query with PropertyRadar's documented Buyer Name
 (Grantee) criterion, an exact RadarID, bounded geography and recent windows,
-a one-result limit, and typed property/location fields. Its scope fingerprint
-binds the exact criteria, field catalog, limit, and offset.
+the official residential `PropertyType` criterion, a one-result limit, and
+typed property/location fields. A free preview (`purchase=False`) requests only
+`RadarID`, because PropertyRadar returns no record when a preview asks for any
+paid field. A preview match is residential by the criterion
+(`residential_basis="property_type_criterion"`); a returned property type must
+be one of the five residential types, else the parse fails closed. Its scope
+fingerprint binds the exact criteria, both field catalogs, limit, and offset,
+so a preview and the paid request for the same criteria share one value. The
+`PropertyType` criterion on `Purchase=0` follows the official reference and has
+not been probed live.
 
 `client.properties.historical_buyer_transfer_match()` is the separate
 historical interface. It accepts `BuyerTransferMatchCriteria` with an inclusive

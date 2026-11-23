@@ -4,7 +4,7 @@ import property_radar
 
 
 def test_installed_version_uses_package_metadata() -> None:
-    assert property_radar.__version__ == "0.4.1"
+    assert property_radar.__version__ == "0.4.2"
 
 
 def test_typing_marker_is_packaged() -> None:
@@ -37,7 +37,9 @@ def test_transaction_history_public_exports_are_available() -> None:
 def test_buyer_transfer_public_exports_are_available() -> None:
     expected = {
         "BUYER_TRANSFER_MATCH_CONTRACT",
+        "BUYER_TRANSFER_PREVIEW_FIELDS",
         "BUYER_TRANSFER_PROPERTY_FIELDS",
+        "BUYER_TRANSFER_RESIDENTIAL_PTYPE_CODES",
         "BuyerTransferBillingEvidence",
         "BuyerTransferBillingStatus",
         "BuyerTransferLinkage",
@@ -49,6 +51,7 @@ def test_buyer_transfer_public_exports_are_available() -> None:
         "BuyerTransferPropertyType",
         "BuyerTransferPublicationWindow",
         "BuyerTransferRecordingWindow",
+        "BuyerTransferResidentialBasis",
         "build_buyer_transfer_match_criteria",
         "buyer_transfer_scope_fingerprint",
         "parse_buyer_transfer_match",

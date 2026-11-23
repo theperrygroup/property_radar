@@ -23,10 +23,19 @@ and fails closed if required result-count or cost evidence is unavailable or
 if preview-only free-quantity metadata appears in the charged response. The
 purchase flag must be exactly boolean and is validated before network I/O.
 
+A transaction-history preview can report a positive `resultCount` without rows.
+The parser then returns no records and `records_withheld=True`. Such a preview
+still never authorizes a purchase.
+
 `buyer_transfer_match()` uses the same dual opt-in and no-paid-retry rules. It
-adds an exact RadarID criterion and a one-result limit, but a preview remains
-only cost/request evidence and never authorizes a purchase automatically. Its
-purchase flag must be exactly boolean or the method fails before network I/O.
+adds the residential `PropertyType` criterion, an exact RadarID criterion and a
+one-result limit, but a preview remains only cost/request evidence and never
+authorizes a purchase automatically. A preview requests only the free `RadarID`
+field. A preview that reports a match without returning the record fails closed
+(`preview_record_withheld`), so a caller never claims a purchase on a withheld
+match. The `PropertyType` criterion on `Purchase=0` follows the official
+reference and has not been probed live. Its purchase flag must be exactly
+boolean or the method fails before network I/O.
 
 The provider does not return the request's `Purchase` choice. Detached raw
 responses therefore parse to unknown billing status unless the caller supplies

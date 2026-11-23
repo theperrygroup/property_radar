@@ -102,6 +102,14 @@ Currency is currently `None`; the API documents no currency. Parsing a
 detached raw envelope without `purchase_requested=` produces `unknown` rather
 than guessing from cost or free quantity.
 
+`history.billing.total_result_count` keeps the provider `totalResultCount` when
+the response supplies it, and is `None` otherwise; `history.total_result_count`
+then falls back to `result_count`. A preview (`purchase=False`) can report a
+positive `resultCount` with an empty `results` list: the history then has no
+records and `records_withheld=True`. A purchased or detached response still
+requires exactly `resultCount` rows. `totalCost` can be a JSON integer, a
+finite JSON number or a decimal string; the cost is always an exact `Decimal`.
+
 ### Typed buyer-transfer property match
 
 Use the exact-target convenience when an application already has one previewed
@@ -130,8 +138,31 @@ with PropertyRadarClient() as client:
 `BUYER_TRANSFER_MATCH_CONTRACT` binds the official source, documented Buyer
 criterion semantics, fixed criteria/fields, zero-or-one cardinality, parser,
 billing rules, and provider limitations. The per-request scope fingerprint
-binds the exact criteria, field catalog, limit, and offset without retaining a
-separate buyer-name digest.
+binds the exact criteria, both field catalogs (`BUYER_TRANSFER_PROPERTY_FIELDS`
+and `BUYER_TRANSFER_PREVIEW_FIELDS`), limit, and offset without retaining a
+separate buyer-name digest. The preview and the paid request for the same
+criteria share one scope fingerprint.
+
+Every buyer-transfer request, preview or paid, recent or historical, adds the
+official residential criterion just before the RadarID criterion, which stays
+last:
+`{"name": "PropertyType", "value": [{"name": "PType", "value": ["SFR", "CND",
+"MFR", "APT", "RES"]}]}` (`BUYER_TRANSFER_RESIDENTIAL_PTYPE_CODES`). This
+criterion on `Purchase=0` follows the official reference and has not been
+probed live.
+
+A preview (`purchase=False`) requests `Fields=RadarID` only
+(`BUYER_TRANSFER_PREVIEW_FIELDS`), because PropertyRadar returns no record when
+a preview asks for any paid field. Preview counts follow the provider:
+`resultCount` counts purchased rows (`0` or the number of returned records) and
+`totalResultCount` counts matches (`0` or `1`). A preview that reports one match
+without the record fails closed with `preview_record_withheld`, and a preview
+with more than one match fails with `total_result_count`. A zero-hit preview can
+arrive as the bare envelope `{"results": []}`; it parses as no match with zero
+counts, zero cost and `billing.provider_metadata_omitted=True`. Paid and
+detached responses keep the strict rule that `resultCount`, the number of
+records and `totalResultCount` are equal. `totalCost` can be a JSON integer, a
+finite JSON number or a decimal string, and parses to an exact `Decimal`.
 
 Set `most_recent_change_of_ownership_only=True` only when the search should be
 limited to the most recent ownership-changing transfer. Despite the provider's
@@ -142,6 +173,16 @@ When present, `result.linkage.property` exposes the exact RadarID, broad
 `PType`, address, city, state, ZIP integer, county, FIPS, APN, and `Decimal`
 coordinates. Missing optional fields stay unavailable and provider strings are
 not trimmed or synthesized. Returned FIPS must identify the requested county.
+A preview record carries only the RadarID, so its other fields are `None`.
+
+`is_residential` and `residential_basis` explain the classification. A record
+matched under the residential criterion without a returned `PType` (every
+preview) is residential with `residential_basis="property_type_criterion"`. A
+returned `PType` gives `residential_basis="property_type"` and must be one of
+the five residential display names (Single Family, Condominium, Multi-Family
+2-4, Multi-Family 5+, Other Res.); any other documented type fails closed with
+`property_type_outside_criterion`. A directly constructed property keeps
+`residential_basis=None` and the `0.4.1` classification.
 
 The linkage relationship is
 `provider_buyer_criterion_property_match`: PropertyRadar returned the property
@@ -201,8 +242,11 @@ relative `recording_window` or a non-`None` `publication_window`.
 
 `BUYER_TRANSFER_HISTORICAL_MATCH_CONTRACT` version 1 binds separate official
 API `5.3.1.0` provenance. Historical scope fingerprints seal the mode, contract
-fingerprint, and exact recording-date range as well as the request criteria,
-fields, limit, and offset. For a detached response envelope, use
+fingerprint, and exact recording-date range as well as the request criteria
+(including the residential `PropertyType` criterion), both field catalogs,
+limit, and offset. The historical method follows the same preview rules as the
+recent one: `Fields=RadarID` only, provider preview counts, the bare zero-hit
+envelope, and `residential_basis`. For a detached response envelope, use
 `parse_historical_buyer_transfer_match`; it reports the historical contract
 fingerprint and returns `HistoricalBuyerTransferMatchResult`.
 
@@ -215,9 +259,11 @@ The historical parser validates known optional envelope metadata and discards
 it; the typed result retains no raw response. Historical calls request at most
 one result, reject counts greater than one, and never paginate.
 
-The existing recent-query method `buyer_transfer_match()`,
-`parse_buyer_transfer_match`, `BUYER_TRANSFER_MATCH_CONTRACT`, its fingerprint,
-and its types remain unchanged under their API `5.2.0.0` contract.
+The recent-query method `buyer_transfer_match()`, `parse_buyer_transfer_match`
+and their types keep their API `5.2.0.0` signatures and attributes. In `0.4.2`
+both buyer-transfer contracts record the preview rules above, so
+`BUYER_TRANSFER_MATCH_CONTRACT` and `BUYER_TRANSFER_HISTORICAL_MATCH_CONTRACT`
+have new contract fingerprints; callers that pin a fingerprint must update it.
 
 A recording date is the document's recording date, not the transaction's
 closing date. Historical results retain the same property-level Buyer

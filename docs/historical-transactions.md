@@ -2,7 +2,11 @@
 
 `property_radar.historical_transaction` defines a separate contract for the
 reviewed PropertyRadar API **5.3.1.0**. It leaves the existing 0.2/0.3 transaction
-models, parsers, fields, and fingerprints unchanged. The module only validates
+models, parsers, and fields unchanged. In 0.4.2 both transaction contracts
+record new response rules (a JSON-number `totalCost`, and for transaction
+history the preview `totalResultCount` and withheld rows), so
+`HISTORICAL_TRANSACTION_CONTRACT` and `TRANSACTION_HISTORY_CONTRACT` have new
+fingerprints. The module only validates
 inputs and parses supplied data; it makes no network calls and authorizes no
 charges.
 
@@ -92,8 +96,13 @@ only for its bounded selection, not for all historical transactions.
 
 Paid responses reject preview-only `quantityFreeRemaining`. Quotes preserve
 that count when supplied and otherwise expose `None`. Parsed costs are exact
-nonnegative `Decimal` values from ASCII decimal strings of at most 64 characters.
-No fixed cents scale, rounding, numeric coercion, or currency is invented.
+nonnegative `Decimal` values. `totalCost` can be a JSON integer of at most 64
+digits, a finite JSON number whose plain decimal form has at most 64
+characters, or an ASCII decimal string of at most 64 characters (`0`, `0.5` and
+`"3.50"` give `Decimal("0")`, `Decimal("0.5")` and `Decimal("3.50")`).
+Booleans, `null`, NaN, infinities, negative values, `-0.0` and all other types
+fail. No fixed cents scale, rounding, string coercion, or currency is invented;
+a JSON number converts exactly from its shortest decimal form.
 Zero selected rows require zero cost under this per-returned-record contract;
 a nonempty selection may still be free under the account's terms.
 

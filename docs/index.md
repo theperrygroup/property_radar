@@ -10,14 +10,17 @@ deny-by-default paid or persistent operations.
 
 ## Project State
 
-The `0.4.1` implementation covers all 37 operations in PropertyRadar API
+The `0.4.2` implementation covers all 37 operations in PropertyRadar API
 contract `5.2.0.0` and adds a separate immutable, fingerprinted historical
 Buyer-criterion property/location interface based on API `5.3.1.0`. Exact,
 inclusive, ordered recording-date ranges may span multiple years. Historical
-results use new types and preserve five-digit ZIP strings with leading zeros;
-existing recent-query contracts, fingerprints, types, typed transaction-history
-evidence, and raw resource return types remain unchanged. See the
-[usage guide](usage.md#historical-recording-dates) for historical queries.
+results use new types and preserve five-digit ZIP strings with leading zeros.
+Version `0.4.2` fixes the live preview and `totalCost` shapes: buyer-transfer
+previews request only `RadarID` and add the residential `PropertyType`
+criterion, and the four typed contracts have new fingerprints. Method
+signatures, existing attributes, and raw resource return types remain
+unchanged. See the [usage guide](usage.md#historical-recording-dates) for
+historical queries.
 
 The separate [historical transaction interface](historical-transactions.md)
 returns preview counts and estimated cost without requiring rows, and retains
