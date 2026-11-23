@@ -85,12 +85,13 @@ _TRANSACTION_HISTORY_STATUSES = ("original", "edited", "deleted", "created")
 _TRANSACTION_HISTORY_FILTER_VALUES = ("CurrentOwner", "All")
 _PROVIDER_PERSON_TYPES = ("Person", "Company", "Entity", "Trust")
 _PROPERTY_OWNERSHIP_ROLES = ("Owner", "Principal", "Trustee")
-_TRANSACTION_ENVELOPE_KEYS = (
+_PROPERTY_PERSONS_ENVELOPE_KEYS = (
     "results",
     "totalCost",
     "quantityFreeRemaining",
     "resultCount",
 )
+_TRANSACTION_ENVELOPE_KEYS = (*_PROPERTY_PERSONS_ENVELOPE_KEYS, "totalResultCount")
 _PARSER_REQUIRED_ENVELOPE_FIELDS = ("results", "totalCost", "resultCount")
 _REQUIRED_ENVELOPE_KEYS = frozenset(_PARSER_REQUIRED_ENVELOPE_FIELDS)
 _TOTAL_COST_MAX_LENGTH = 64
@@ -130,6 +131,7 @@ _ENVELOPE_FIELD_CONTRACT_SOURCE: dict[str, dict[str, object]] = {
         "preview_only": True,
     },
     "resultCount": {"type": "integer", "nullable": False, "required": False},
+    "totalResultCount": {"type": "integer", "nullable": False, "required": False},
 }
 _PARTY_FIELD_CONTRACT_SOURCE: dict[str, dict[str, object]] = {
     "kind": {
@@ -217,6 +219,7 @@ _BILLING_EVIDENCE_SOURCE: dict[str, object] = {
         "preview_only": True,
     },
     "result_count": {"provider_source": "resultCount"},
+    "total_result_count": {"provider_source": "totalResultCount", "nullable": True},
     "request_id": {
         "type": "string",
         "nullable": True,
@@ -240,7 +243,20 @@ _PARSER_POLICY_SOURCE: dict[str, object] = {
         "minimum": 0,
         "must_match_records": True,
         "provider_maximum": None,
+        "withheld_records": {
+            "purchase_requested": False,
+            "results": "empty",
+            "result_count": "positive",
+            "records_withheld": True,
+        },
     },
+    "total_result_count": {
+        "required": False,
+        "minimum": 0,
+        "not_less_than": "result_count",
+        "provider_maximum": None,
+    },
+    "property_persons_envelope_fields": _PROPERTY_PERSONS_ENVELOPE_KEYS,
     "quantity_free_remaining": {"minimum": 0},
     "total_cost": {
         "accepted_types": _TOTAL_COST_PROVIDER_TYPES,
@@ -377,7 +393,12 @@ class TransactionParty:
 
 @dataclass(frozen=True, slots=True, repr=False)
 class TransactionBillingEvidence:
-    """Immutable billing evidence for one transaction-history response."""
+    """Immutable billing evidence for one transaction-history response.
+
+    ``total_result_count`` is the provider ``totalResultCount`` when the
+    response supplied it, and ``None`` otherwise. It is never less than
+    ``result_count``.
+    """
 
     purchase_requested: bool | None
     status: TransactionBillingStatus
@@ -386,6 +407,7 @@ class TransactionBillingEvidence:
     quantity_free_remaining: int | None
     result_count: int
     request_id: str | None
+    total_result_count: int | None = None
 
     def __post_init__(self) -> None:
         """Reject mutable or contradictory manually constructed evidence."""
@@ -426,6 +448,15 @@ class TransactionBillingEvidence:
             _sanitized_request_id(self.request_id) != self.request_id
         ):
             raise ValueError("request_id is not a sanitized correlation code")
+        if self.total_result_count is not None and (
+            type(self.total_result_count) is not int
+            or self.total_result_count < 0
+            or self.total_result_count < self.result_count
+        ):
+            raise ValueError(
+                "total_result_count must be None or a nonnegative integer "
+                "not less than result_count"
+            )
 
     def __repr__(self) -> str:
         """Return non-personal billing metadata without the request identifier."""
@@ -436,6 +467,7 @@ class TransactionBillingEvidence:
             f"currency_available={self.currency is not None!r}, "
             f"quantity_free_remaining={self.quantity_free_remaining!r}, "
             f"result_count={self.result_count!r}, "
+            f"total_result_count={self.total_result_count!r}, "
             f"request_id_available={self.request_id is not None!r})"
         )
 
@@ -504,14 +536,19 @@ class TransactionHistory:
     composed, an empty tuple when the provider returned no owners, and an
     ordered tuple otherwise. These identities are property-level evidence and
     are deliberately not attached to a particular transaction party.
+
+    ``records_withheld`` is ``True`` only for a preview response that reported
+    a positive ``resultCount`` but returned no rows. ``records`` is then empty
+    and ``billing.result_count`` keeps the provider count.
     """
 
     records: tuple[TransactionHistoryRecord, ...]
     current_owners: tuple[TransactionParty, ...] | None
     billing: TransactionBillingEvidence
+    records_withheld: bool = False
 
     def __post_init__(self) -> None:
-        """Reject mutable record and identity containers."""
+        """Reject mutable containers and contradictory withheld-row evidence."""
         if type(self.records) is not tuple or any(
             not isinstance(record, TransactionHistoryRecord) for record in self.records
         ):
@@ -525,11 +562,23 @@ class TransactionHistory:
             raise ValueError("current_owners must be a party tuple or None")
         if not isinstance(self.billing, TransactionBillingEvidence):
             raise ValueError("billing must be TransactionBillingEvidence")
+        if type(self.records_withheld) is not bool:
+            raise ValueError("records_withheld must be a boolean")
+        if self.records_withheld and (
+            self.records
+            or self.billing.status != "preview"
+            or self.billing.result_count <= 0
+        ):
+            raise ValueError(
+                "records_withheld requires no records, preview status and a "
+                "positive result_count"
+            )
 
     def __repr__(self) -> str:
         """Return aggregate metadata without licensed record values."""
         return (
             f"{type(self).__name__}(record_count={len(self.records)}, "
+            f"records_withheld={self.records_withheld!r}, "
             f"current_owners_available={self.current_owners is not None!r}, "
             f"current_owner_count="
             f"{None if self.current_owners is None else len(self.current_owners)!r}, "
@@ -553,7 +602,9 @@ class TransactionHistory:
 
     @property
     def total_result_count(self) -> int:
-        """Return the non-paginated result count compatibility view."""
+        """Return the provider total count, or ``result_count`` without one."""
+        if self.billing.total_result_count is not None:
+            return self.billing.total_result_count
         return self.billing.result_count
 
     @property
@@ -591,6 +642,13 @@ def parse_transaction_history(
     When ``property_persons`` is supplied, its ordered identities are exposed
     separately as current-owner evidence after every returned ``RadarID`` is
     checked against ``radar_id``.
+
+    ``resultCount`` must equal the number of returned rows. One exception
+    applies only when ``purchase_requested`` is exactly ``False``: a preview
+    may withhold its rows, so an empty ``results`` list with a positive
+    ``resultCount`` gives no records and ``records_withheld=True``. The
+    optional ``totalResultCount`` must be an exact nonnegative integer that is
+    not less than ``resultCount``.
 
     Args:
         envelope: Decoded JSON returned by ``properties.transactions`` when
@@ -637,7 +695,16 @@ def parse_transaction_history(
         typed_envelope["resultCount"],
         field_name="result_count",
     )
-    if result_count != len(records):
+    total_result_count = None
+    if "totalResultCount" in typed_envelope:
+        total_result_count = _parse_nonnegative_integer(
+            typed_envelope["totalResultCount"],
+            field_name="total_result_count",
+        )
+        if result_count > total_result_count:
+            _raise_invalid("total_result_count_mismatch")
+    records_withheld = purchase_requested is False and not records and result_count > 0
+    if result_count != len(records) and not records_withheld:
         _raise_invalid("result_count_mismatch")
 
     quantity_free_remaining = None
@@ -674,7 +741,9 @@ def parse_transaction_history(
             quantity_free_remaining=quantity_free_remaining,
             result_count=result_count,
             request_id=_sanitized_request_id(request_id),
+            total_result_count=total_result_count,
         ),
+        records_withheld=records_withheld,
     )
 
 
@@ -772,7 +841,7 @@ def _parse_property_persons(
         snapshot_reason="property_persons_snapshot",
         key_reason="property_persons_key_type",
     )
-    if set(typed_envelope).difference(_TRANSACTION_ENVELOPE_KEYS):
+    if set(typed_envelope).difference(_PROPERTY_PERSONS_ENVELOPE_KEYS):
         _raise_invalid("property_persons_undocumented_envelope_fields")
     raw_results = typed_envelope.get("results")
     if not isinstance(raw_results, list):
