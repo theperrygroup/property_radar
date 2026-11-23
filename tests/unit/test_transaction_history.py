@@ -4,12 +4,13 @@ import hashlib
 import json
 import traceback
 from collections.abc import Callable, Iterator, Mapping
-from dataclasses import FrozenInstanceError, replace
+from dataclasses import FrozenInstanceError, fields, replace
 from decimal import Decimal
 from enum import IntEnum
 from types import MappingProxyType
 from typing import cast, get_type_hints
 
+import httpx
 import pytest
 
 from property_radar import (
@@ -18,6 +19,7 @@ from property_radar import (
     TRANSACTION_HISTORY_FIELDS,
     InvalidResponseError,
     PropertyPersonIdentityField,
+    PropertyRadarClient,
     TransactionBillingEvidence,
     TransactionHistory,
     TransactionHistoryField,
@@ -62,6 +64,10 @@ class IntegerSubclass(int):
 
 class StringSubclass(str):
     """A non-JSON string type that strict parsing must reject."""
+
+
+class FloatSubclass(float):
+    """A non-JSON float type that strict parsing must reject."""
 
 
 class CountEnum(IntEnum):
@@ -235,6 +241,190 @@ def record_with_parties(
     )
 
 
+# 0.4.2 accepts a JSON int or float totalCost (D1), documents totalResultCount
+# and accepts withheld preview rows, so the contract fingerprint moves.
+TRANSACTION_HISTORY_CONTRACT_FINGERPRINT_0_4_1 = (
+    # pragma: allowlist nextline secret
+    "d750039019a93bbfc0449b6eecdb47ea8f064e18a7dcfcbd01c3ec30c4e057a8"
+)
+TRANSACTION_HISTORY_CONTRACT_FINGERPRINT_0_4_2 = (
+    # pragma: allowlist nextline secret
+    "db0dd03413f298367f79749e522bd3e454e295cafcc68e7dd6d077085254e707"
+)
+TOTAL_COST_PROVIDER_TYPES = ("integer", "number", "string")
+TOTAL_COST_REJECTED_CLASSES = (
+    "boolean",
+    "null",
+    "nan",
+    "infinity",
+    "negative",
+    "negative_zero",
+    "over_64_characters",
+    "other_types",
+)
+TOTAL_COST_ERROR = (
+    r"^PropertyRadar returned invalid transaction history \(total_cost\)\.$"
+)
+# The exact live Purchase=0 transactions body, byte for byte as JSON text.
+LIVE_TRANSACTIONS_PREVIEW_BODY = (
+    '{"results":[],"totalCost":0,"quantityFreeRemaining":9866,'
+    '"resultCount":2,"totalResultCount":2}'
+)
+# Every accepted totalCost class and the exact Decimal it must become.
+ACCEPTED_TOTAL_COSTS = [
+    pytest.param(0, Decimal("0"), id="json-int-zero-live"),
+    pytest.param(12, Decimal("12"), id="json-int"),
+    pytest.param(10**64 - 1, Decimal("9" * 64), id="json-int-64-digits"),
+    pytest.param(0.0, Decimal("0.0"), id="json-float-zero"),
+    pytest.param(0.5, Decimal("0.5"), id="json-float-half"),
+    pytest.param(1.25, Decimal("1.25"), id="json-float"),
+    pytest.param(0.1, Decimal("0.1"), id="json-float-repr-not-binary"),
+    pytest.param(2.675, Decimal("2.675"), id="json-float-repr-not-rounded"),
+    pytest.param(1e-7, Decimal("1E-7"), id="json-float-exponent-form"),
+    pytest.param(1e63, Decimal("1E+63"), id="json-float-64-character-plain-form"),
+    pytest.param(1e-62, Decimal("1E-62"), id="json-float-64-character-fraction"),
+    pytest.param("3.50", Decimal("3.50"), id="decimal-string-scale-kept"),
+    pytest.param("0", Decimal("0"), id="decimal-string-zero"),
+    pytest.param("9" * 64, Decimal("9" * 64), id="decimal-string-64-characters"),
+]
+ACCEPTED_TOTAL_COST_VALUES = [
+    pytest.param(case.values[0], id=case.id) for case in ACCEPTED_TOTAL_COSTS
+]
+# Every rejected totalCost class; each fails closed with the total_cost reason.
+REJECTED_TOTAL_COSTS = [
+    pytest.param(True, id="bool-true"),
+    pytest.param(False, id="bool-false"),
+    pytest.param(None, id="null"),
+    pytest.param(float("nan"), id="nan"),
+    pytest.param(float("inf"), id="positive-infinity"),
+    pytest.param(float("-inf"), id="negative-infinity"),
+    pytest.param(-1, id="negative-int"),
+    pytest.param(-0.5, id="negative-float"),
+    pytest.param(-0.0, id="negative-zero-float"),
+    pytest.param(10**64, id="int-65-digits"),
+    pytest.param(10**5000, id="int-beyond-the-str-conversion-limit"),
+    pytest.param("1" * 65, id="string-65-characters"),
+    pytest.param(1e300, id="float-301-character-plain-form"),
+    pytest.param(1e64, id="float-65-character-plain-form"),
+    pytest.param(1e-63, id="float-65-character-fraction"),
+    pytest.param(5e-324, id="float-subnormal-326-character-fraction"),
+    pytest.param([], id="list"),
+    pytest.param([0], id="list-holding-a-valid-cost"),
+    pytest.param({}, id="dict"),
+    pytest.param({"totalCost": 0}, id="dict-holding-a-valid-cost"),
+    pytest.param(Decimal("1.25"), id="decimal-object"),
+    pytest.param(IntegerSubclass(1), id="int-subclass"),
+    pytest.param(FloatSubclass(0.5), id="float-subclass"),
+    pytest.param(StringSubclass("0.50"), id="string-subclass"),
+]
+# JSON wire tokens for totalCost, decoded by the transport's stdlib JSON parser.
+ACCEPTED_WIRE_TOTAL_COSTS = [
+    pytest.param("0", Decimal("0"), id="json-int-zero-live"),
+    pytest.param("12", Decimal("12"), id="json-int"),
+    pytest.param("0.5", Decimal("0.5"), id="json-float-half"),
+    pytest.param("1.25", Decimal("1.25"), id="json-float"),
+    pytest.param("0.1", Decimal("0.1"), id="json-float-repr-not-binary"),
+    pytest.param("1e-7", Decimal("1E-7"), id="json-float-exponent-form"),
+    pytest.param('"3.50"', Decimal("3.50"), id="json-decimal-string"),
+]
+REJECTED_WIRE_TOTAL_COSTS = [
+    pytest.param("true", id="json-true"),
+    pytest.param("false", id="json-false"),
+    pytest.param("null", id="json-null"),
+    pytest.param("NaN", id="json-nan-token"),
+    pytest.param("Infinity", id="json-infinity-token"),
+    pytest.param("-Infinity", id="json-negative-infinity-token"),
+    pytest.param("1E400", id="json-float-overflow-to-infinity"),
+    pytest.param("-1", id="json-negative-int"),
+    pytest.param("-0.5", id="json-negative-float"),
+    pytest.param("-0.0", id="json-negative-zero-float"),
+    pytest.param("1" + "0" * 64, id="json-int-65-digits"),
+    pytest.param('"' + "1" * 65 + '"', id="json-string-65-characters"),
+    pytest.param("1e300", id="json-float-301-character-plain-form"),
+    pytest.param("[]", id="json-array"),
+    pytest.param("{}", id="json-object"),
+]
+
+
+def live_transactions_preview_envelope() -> dict[str, object]:
+    """Return the exact live Purchase=0 transactions envelope (totalCost int 0)."""
+    return {
+        "results": [],
+        "totalCost": 0,
+        "quantityFreeRemaining": 9866,
+        "resultCount": 2,
+        "totalResultCount": 2,
+    }
+
+
+def d1_preview_envelope() -> dict[str, object]:
+    """Return a preview that isolates D1 from the withheld-row rule."""
+    return {
+        "results": [],
+        "totalCost": 0,
+        "resultCount": 0,
+        "quantityFreeRemaining": 9866,
+    }
+
+
+def envelope_for_purchase(
+    purchase_requested: bool | None, total_cost: object
+) -> dict[str, object]:
+    """Return the synthetic envelope, valid for one purchase mode, with a cost."""
+    envelope = synthetic_envelope()
+    envelope["totalCost"] = total_cost
+    if purchase_requested is True:
+        envelope.pop("quantityFreeRemaining")
+    return envelope
+
+
+def body_with_total_cost(envelope: Mapping[str, object], token: str) -> str:
+    """Return JSON wire text for an envelope with one raw totalCost token."""
+    placeholder = "SYNTHETIC_TOTAL_COST_TOKEN"
+    text = json.dumps({**envelope, "totalCost": placeholder}, separators=(",", ":"))
+    return text.replace(f'"{placeholder}"', token)
+
+
+def json_response(body: str) -> httpx.Response:
+    """Return a 200 response that carries the exact JSON wire text."""
+    return httpx.Response(
+        200,
+        content=body.encode("ascii"),
+        headers={"Content-Type": "application/json"},
+    )
+
+
+def make_client(
+    handler: Callable[[httpx.Request], httpx.Response], *, allow_charges: bool = False
+) -> tuple[PropertyRadarClient, httpx.Client]:
+    """Return a client whose only transport is the synthetic handler."""
+    http_client = httpx.Client(transport=httpx.MockTransport(handler))
+    return (
+        PropertyRadarClient(
+            api_key="synthetic-token",  # pragma: allowlist secret
+            http_client=http_client,
+            allow_charges=allow_charges,
+            max_retries=3,
+        ),
+        http_client,
+    )
+
+
+def preview_billing(**changes: object) -> TransactionBillingEvidence:
+    """Return manual preview evidence for two withheld rows."""
+    values: dict[str, object] = {
+        "purchase_requested": False,
+        "status": "preview",
+        "total_cost": Decimal("0"),
+        "currency": None,
+        "quantity_free_remaining": 9866,
+        "result_count": 2,
+        "request_id": None,
+    }
+    values.update(changes)
+    return TransactionBillingEvidence(**values)  # type: ignore[arg-type]
+
+
 def test_contract_is_current_deeply_immutable_and_fingerprinted() -> None:
     assert isinstance(TRANSACTION_HISTORY_CONTRACT, MappingProxyType)
     assert TRANSACTION_HISTORY_CONTRACT["api_version"] == "5.2.0.0"
@@ -288,7 +478,8 @@ def test_contract_is_current_deeply_immutable_and_fingerprinted() -> None:
         },
         "total_cost": {
             "provider_source": "totalCost",
-            "type": "decimal_string",
+            "type": "decimal",
+            "provider_types": TOTAL_COST_PROVIDER_TYPES,
             "required_by_parser": True,
         },
         "currency": {
@@ -301,6 +492,10 @@ def test_contract_is_current_deeply_immutable_and_fingerprinted() -> None:
             "preview_only": True,
         },
         "result_count": {"provider_source": "resultCount"},
+        "total_result_count": {
+            "provider_source": "totalResultCount",
+            "nullable": True,
+        },
         "request_id": {
             "type": "string",
             "nullable": True,
@@ -309,6 +504,65 @@ def test_contract_is_current_deeply_immutable_and_fingerprinted() -> None:
             "max_length": 128,
         },
     }
+    assert TRANSACTION_HISTORY_CONTRACT["envelope_fields"] == {
+        "results": {"type": "array", "nullable": False, "required": False},
+        "totalCost": {
+            "type": TOTAL_COST_PROVIDER_TYPES,
+            "nullable": False,
+            "required": False,
+        },
+        "quantityFreeRemaining": {
+            "type": "integer",
+            "nullable": False,
+            "required": False,
+            "preview_only": True,
+        },
+        "resultCount": {"type": "integer", "nullable": False, "required": False},
+        "totalResultCount": {
+            "type": "integer",
+            "nullable": False,
+            "required": False,
+        },
+    }
+    parser_policy = cast(
+        Mapping[str, object], TRANSACTION_HISTORY_CONTRACT["parser_policy"]
+    )
+    assert parser_policy["required_envelope_fields"] == (
+        "results",
+        "totalCost",
+        "resultCount",
+    )
+    assert parser_policy["total_cost"] == {
+        "fullmatch_pattern": r"[0-9]+(?:\.[0-9]+)?",
+        "max_length": 64,
+        "accepted_types": TOTAL_COST_PROVIDER_TYPES,
+        "integer": "exact_int_minimum_0_maximum_64_digits",
+        "number": "finite_float_minimum_0_decimal_repr_plain_form_matches_pattern",
+        "rejected": TOTAL_COST_REJECTED_CLASSES,
+    }
+    assert parser_policy["result_count"] == {
+        "minimum": 0,
+        "must_match_records": True,
+        "provider_maximum": None,
+        "withheld_records": {
+            "purchase_requested": False,
+            "results": "empty",
+            "result_count": "positive",
+            "records_withheld": True,
+        },
+    }
+    assert parser_policy["total_result_count"] == {
+        "required": False,
+        "minimum": 0,
+        "not_less_than": "result_count",
+        "provider_maximum": None,
+    }
+    assert parser_policy["property_persons_envelope_fields"] == (
+        "results",
+        "totalCost",
+        "quantityFreeRemaining",
+        "resultCount",
+    )
     fingerprint_source = {
         key: thaw_contract_value(value)
         for key, value in TRANSACTION_HISTORY_CONTRACT.items()
@@ -325,8 +579,10 @@ def test_contract_is_current_deeply_immutable_and_fingerprinted() -> None:
         == (TRANSACTION_HISTORY_CONTRACT["contract_fingerprint"])
     )
     assert TRANSACTION_HISTORY_CONTRACT["contract_fingerprint"] == (
-        # pragma: allowlist nextline secret
-        "d750039019a93bbfc0449b6eecdb47ea8f064e18a7dcfcbd01c3ec30c4e057a8"
+        TRANSACTION_HISTORY_CONTRACT_FINGERPRINT_0_4_2
+    )
+    assert TRANSACTION_HISTORY_CONTRACT["contract_fingerprint"] != (
+        TRANSACTION_HISTORY_CONTRACT_FINGERPRINT_0_4_1
     )
     assert_deeply_immutable(TRANSACTION_HISTORY_CONTRACT)
 
@@ -419,6 +675,8 @@ def test_parse_returns_immutable_values_and_unknown_billing_context() -> None:
     assert parsed.total_cost == Decimal("1.00")
     assert parsed.result_count == 1
     assert parsed.total_result_count == 1
+    assert parsed.billing.total_result_count is None
+    assert parsed.records_withheld is False
     assert parsed.billing_status == "unknown"
     assert parsed.purchase_requested is None
     assert parsed.currency is None
@@ -723,9 +981,14 @@ def test_property_person_malformed_fields_fail_closed(
             "property_persons_result_count",
         ),
         (
-            {"results": [], "totalCost": 1},
+            {"results": [], "totalCost": -1},
             "P-SYNTHETIC",
             "total_cost",
+        ),
+        (
+            {"results": [], "totalResultCount": 0},
+            "P-SYNTHETIC",
+            "property_persons_undocumented_envelope_fields",
         ),
         (
             {"results": [], "quantityFreeRemaining": -1},
@@ -959,6 +1222,22 @@ def test_snapshot_failures_are_sanitized(
             "result_count_mismatch",
         ),
         (
+            lambda envelope: envelope.update({"results": []}),
+            "result_count_mismatch",
+        ),
+        (
+            lambda envelope: envelope.update({"totalResultCount": True}),
+            "total_result_count",
+        ),
+        (
+            lambda envelope: envelope.update({"totalResultCount": None}),
+            "total_result_count",
+        ),
+        (
+            lambda envelope: envelope.update({"totalResultCount": 0}),
+            "total_result_count_mismatch",
+        ),
+        (
             lambda envelope: envelope.update({"quantityFreeRemaining": -1}),
             "quantity_free_remaining",
         ),
@@ -970,7 +1249,7 @@ def test_snapshot_failures_are_sanitized(
             lambda envelope: envelope.update({"quantityFreeRemaining": "249"}),
             "quantity_free_remaining",
         ),
-        (lambda envelope: envelope.update({"totalCost": 1}), "total_cost"),
+        (lambda envelope: envelope.update({"totalCost": -1}), "total_cost"),
         (lambda envelope: envelope.update({"totalCost": True}), "total_cost"),
         (lambda envelope: envelope.update({"totalCost": None}), "total_cost"),
         (lambda envelope: envelope.update({"totalCost": "-1.00"}), "total_cost"),
@@ -1096,3 +1375,625 @@ def test_manual_model_validation_rejects_mutable_or_contradictory_values() -> No
 def test_non_mapping_envelope_fails_closed() -> None:
     with pytest.raises(InvalidResponseError, match=r"\(envelope_type\)"):
         parse_transaction_history(cast(Mapping[str, object], []))
+
+
+@pytest.mark.parametrize("purchase_requested", [False, True, None])
+@pytest.mark.parametrize(("total_cost", "expected"), ACCEPTED_TOTAL_COSTS)
+def test_main_envelope_accepts_json_int_float_and_decimal_string_costs_exactly(
+    total_cost: object,
+    expected: Decimal,
+    purchase_requested: bool | None,
+) -> None:
+    parsed = parse_transaction_history(
+        envelope_for_purchase(purchase_requested, total_cost),
+        purchase_requested=purchase_requested,
+    )
+
+    assert type(parsed.total_cost) is Decimal
+    assert parsed.total_cost == expected
+    assert parsed.total_cost.as_tuple() == expected.as_tuple()
+    assert parsed.result_count == 1
+    assert len(parsed.records) == 1
+
+
+@pytest.mark.parametrize("total_cost", [0.1, 2.675, 1e-7])
+def test_float_costs_convert_through_repr_not_the_binary_expansion(
+    total_cost: float,
+) -> None:
+    parsed = parse_transaction_history(
+        envelope_for_purchase(False, total_cost), purchase_requested=False
+    )
+
+    assert parsed.total_cost == Decimal(repr(total_cost))
+    assert parsed.total_cost != Decimal(total_cost)
+
+
+@pytest.mark.parametrize("purchase_requested", [False, True, None])
+@pytest.mark.parametrize("total_cost", REJECTED_TOTAL_COSTS)
+def test_main_envelope_rejects_each_cost_class_outside_the_rule(
+    total_cost: object,
+    purchase_requested: bool | None,
+) -> None:
+    with pytest.raises(InvalidResponseError, match=TOTAL_COST_ERROR) as failure:
+        parse_transaction_history(
+            envelope_for_purchase(purchase_requested, total_cost),
+            purchase_requested=purchase_requested,
+        )
+    assert failure.value.__cause__ is None
+
+
+@pytest.mark.parametrize("total_cost", ACCEPTED_TOTAL_COST_VALUES)
+def test_property_persons_envelope_accepts_each_total_cost_class(
+    total_cost: object,
+) -> None:
+    persons = synthetic_persons()
+    persons["totalCost"] = total_cost
+
+    parsed = parse_transaction_history(
+        synthetic_envelope(),
+        property_persons=persons,
+        radar_id="P-SYNTHETIC",
+    )
+
+    assert parsed.current_owners == ()
+    assert parsed.total_cost == Decimal("1.00")
+
+
+@pytest.mark.parametrize("total_cost", REJECTED_TOTAL_COSTS)
+def test_property_persons_envelope_rejects_each_cost_class_outside_the_rule(
+    total_cost: object,
+) -> None:
+    persons = synthetic_persons()
+    persons["totalCost"] = total_cost
+    with pytest.raises(InvalidResponseError, match=TOTAL_COST_ERROR):
+        parse_transaction_history(
+            synthetic_envelope(),
+            property_persons=persons,
+            radar_id="P-SYNTHETIC",
+        )
+
+
+def test_live_transactions_preview_envelope_parses_with_withheld_rows() -> None:
+    envelope = live_transactions_preview_envelope()
+
+    parsed = parse_transaction_history(envelope, purchase_requested=False)
+
+    assert parsed.records == ()
+    assert parsed.records_withheld is True
+    assert parsed.current_owners is None
+    assert parsed.result_count == 2
+    assert parsed.total_result_count == 2
+    assert type(parsed.total_cost) is Decimal
+    assert parsed.total_cost.as_tuple() == Decimal("0").as_tuple()
+    assert parsed.quantity_free_remaining == 9866
+    assert parsed.billing_status == "preview"
+    assert parsed.billing == TransactionBillingEvidence(
+        purchase_requested=False,
+        status="preview",
+        total_cost=Decimal("0"),
+        currency=None,
+        quantity_free_remaining=9866,
+        result_count=2,
+        request_id=None,
+        total_result_count=2,
+    )
+    assert envelope == live_transactions_preview_envelope()
+    assert repr(parsed).startswith(
+        "TransactionHistory(record_count=0, records_withheld=True, "
+    )
+    assert repr(parsed.billing).endswith(
+        "result_count=2, total_result_count=2, request_id_available=False)"
+    )
+
+
+@pytest.mark.parametrize("purchase_requested", [True, None])
+def test_live_transactions_preview_envelope_is_never_a_charged_or_unknown_history(
+    purchase_requested: bool | None,
+) -> None:
+    with pytest.raises(InvalidResponseError, match=r"\(result_count_mismatch\)"):
+        parse_transaction_history(
+            live_transactions_preview_envelope(),
+            purchase_requested=purchase_requested,
+        )
+
+
+def test_live_transactions_preview_envelope_through_transaction_history() -> None:
+    decoded = json.loads(LIVE_TRANSACTIONS_PREVIEW_BODY)
+    assert decoded == live_transactions_preview_envelope()
+    assert type(decoded["totalCost"]) is int
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return json_response(LIVE_TRANSACTIONS_PREVIEW_BODY)
+
+    client, transport = make_client(handler)
+    try:
+        history = client.properties.transaction_history("P-SYNTHETIC", purchase=False)
+    finally:
+        transport.close()
+
+    assert history.records == ()
+    assert history.records_withheld is True
+    assert history.current_owners is None
+    assert history.billing_status == "preview"
+    assert history.purchase_requested is False
+    assert type(history.total_cost) is Decimal
+    assert history.total_cost.as_tuple() == Decimal("0").as_tuple()
+    assert history.quantity_free_remaining == 9866
+    assert history.result_count == 2
+    assert history.total_result_count == 2
+    assert history.billing.total_result_count == 2
+    assert len(requests) == 1
+    request = requests[0]
+    assert request.method == "GET"
+    assert request.url.path == "/v1/properties/P-SYNTHETIC/transactions"
+    assert request.url.params.multi_items() == [
+        ("Fields", ",".join(TRANSACTION_HISTORY_FIELDS)),
+        ("Purchase", "0"),
+    ]
+
+
+def test_d1_preview_through_transaction_history_keeps_the_json_int_cost_exact() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return json_response(json.dumps(d1_preview_envelope()))
+
+    client, transport = make_client(handler)
+    try:
+        history = client.properties.transaction_history("P-SYNTHETIC", purchase=False)
+    finally:
+        transport.close()
+
+    assert history.records == ()
+    assert history.records_withheld is False
+    assert history.billing_status == "preview"
+    assert type(history.total_cost) is Decimal
+    assert history.total_cost.as_tuple() == Decimal("0").as_tuple()
+    assert history.quantity_free_remaining == 9866
+    assert history.result_count == 0
+    assert history.billing.total_result_count is None
+    assert history.total_result_count == 0
+    assert len(requests) == 1
+
+
+@pytest.mark.parametrize(("token", "expected"), ACCEPTED_WIRE_TOTAL_COSTS)
+def test_transaction_history_accepts_each_wire_total_cost_on_the_live_shape(
+    token: str, expected: Decimal
+) -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return json_response(
+            body_with_total_cost(live_transactions_preview_envelope(), token)
+        )
+
+    client, transport = make_client(handler)
+    try:
+        history = client.properties.transaction_history("P-SYNTHETIC")
+    finally:
+        transport.close()
+
+    assert type(history.total_cost) is Decimal
+    assert history.total_cost == expected
+    assert history.total_cost.as_tuple() == expected.as_tuple()
+    assert history.records_withheld is True
+    assert history.total_result_count == 2
+    assert len(requests) == 1
+
+
+@pytest.mark.parametrize("token", REJECTED_WIRE_TOTAL_COSTS)
+def test_transaction_history_rejects_each_invalid_wire_total_cost_on_the_live_shape(
+    token: str,
+) -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return json_response(
+            body_with_total_cost(live_transactions_preview_envelope(), token)
+        )
+
+    client, transport = make_client(handler)
+    try:
+        with pytest.raises(InvalidResponseError, match=TOTAL_COST_ERROR):
+            client.properties.transaction_history("P-SYNTHETIC")
+    finally:
+        transport.close()
+    assert len(requests) == 1
+
+
+@pytest.mark.parametrize(
+    ("token", "expected"),
+    [
+        pytest.param("1", Decimal("1"), id="json-int"),
+        pytest.param("0.25", Decimal("0.25"), id="json-float"),
+        pytest.param('"0.25"', Decimal("0.25"), id="json-decimal-string"),
+    ],
+)
+def test_paid_transaction_history_accepts_json_costs_and_total_result_count(
+    token: str, expected: Decimal
+) -> None:
+    envelope = synthetic_envelope()
+    envelope.pop("quantityFreeRemaining")
+    envelope["totalResultCount"] = 3
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return json_response(body_with_total_cost(envelope, token))
+
+    client, transport = make_client(handler, allow_charges=True)
+    try:
+        history = client.properties.transaction_history("P-SYNTHETIC", purchase=True)
+    finally:
+        transport.close()
+
+    assert history.billing_status == "charged"
+    assert type(history.total_cost) is Decimal
+    assert history.total_cost.as_tuple() == expected.as_tuple()
+    assert len(history.records) == 1
+    assert history.records_withheld is False
+    assert history.result_count == 1
+    assert history.billing.total_result_count == 3
+    assert history.total_result_count == 3
+    assert len(requests) == 1
+    assert requests[0].url.params["Purchase"] == "1"
+
+
+def test_paid_transaction_history_rejects_a_nan_cost_without_retry() -> None:
+    envelope = synthetic_envelope()
+    envelope.pop("quantityFreeRemaining")
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return json_response(body_with_total_cost(envelope, "NaN"))
+
+    client, transport = make_client(handler, allow_charges=True)
+    try:
+        with pytest.raises(InvalidResponseError, match=TOTAL_COST_ERROR):
+            client.properties.transaction_history("P-SYNTHETIC", purchase=True)
+    finally:
+        transport.close()
+    assert len(requests) == 1
+
+
+@pytest.mark.parametrize("purchase_requested", [False, True, None])
+@pytest.mark.parametrize("total_result_count", [1, 2, 2_147_483_648])
+def test_total_result_count_is_documented_optional_and_not_below_result_count(
+    total_result_count: int,
+    purchase_requested: bool | None,
+) -> None:
+    envelope = envelope_for_purchase(purchase_requested, "1.00")
+    envelope["totalResultCount"] = total_result_count
+
+    parsed = parse_transaction_history(envelope, purchase_requested=purchase_requested)
+
+    assert parsed.result_count == 1
+    assert len(parsed.records) == 1
+    assert parsed.billing.total_result_count == total_result_count
+    assert parsed.total_result_count == total_result_count
+    assert parsed.records_withheld is False
+
+
+@pytest.mark.parametrize(
+    "total_result_count",
+    [
+        pytest.param(True, id="bool-true"),
+        pytest.param(False, id="bool-false"),
+        pytest.param(None, id="null"),
+        pytest.param("2", id="string"),
+        pytest.param(2.0, id="float"),
+        pytest.param(-1, id="negative"),
+        pytest.param(IntegerSubclass(2), id="int-subclass"),
+        pytest.param(CountEnum.ONE, id="int-enum"),
+        pytest.param([2], id="list"),
+    ],
+)
+def test_total_result_count_rejects_every_non_exact_nonnegative_int(
+    total_result_count: object,
+) -> None:
+    envelope = live_transactions_preview_envelope()
+    envelope["totalResultCount"] = total_result_count
+    with pytest.raises(
+        InvalidResponseError,
+        match=r"^PropertyRadar returned invalid transaction history "
+        r"\(total_result_count\)\.$",
+    ):
+        parse_transaction_history(envelope, purchase_requested=False)
+
+
+@pytest.mark.parametrize(
+    ("result_count", "total_result_count"), [(2, 1), (2, 0), (3, 2)]
+)
+def test_result_count_above_total_result_count_fails_closed(
+    result_count: int,
+    total_result_count: int,
+) -> None:
+    envelope = live_transactions_preview_envelope()
+    envelope["resultCount"] = result_count
+    envelope["totalResultCount"] = total_result_count
+    with pytest.raises(
+        InvalidResponseError,
+        match=r"^PropertyRadar returned invalid transaction history "
+        r"\(total_result_count_mismatch\)\.$",
+    ):
+        parse_transaction_history(envelope, purchase_requested=False)
+
+
+@pytest.mark.parametrize(
+    ("changes", "reason"),
+    [
+        ({"resultCount": True, "totalResultCount": True}, "result_count"),
+        ({"totalResultCount": True, "totalCost": None}, "total_result_count"),
+        (
+            {"totalResultCount": True, "quantityFreeRemaining": -1},
+            "total_result_count",
+        ),
+        ({"resultCount": 2, "totalResultCount": 1}, "total_result_count_mismatch"),
+        (
+            {"totalResultCount": 0, "quantityFreeRemaining": -1},
+            "total_result_count_mismatch",
+        ),
+        ({"totalResultCount": "1", "results": "bad"}, "results_type"),
+        (
+            {"totalResultCount": 1, "undocumented": "value"},
+            "undocumented_envelope_keys",
+        ),
+    ],
+)
+def test_total_result_count_checks_follow_the_documented_order(
+    changes: dict[str, object],
+    reason: str,
+) -> None:
+    envelope = synthetic_envelope()
+    envelope.update(changes)
+    with pytest.raises(InvalidResponseError, match=rf"\({reason}\)"):
+        parse_transaction_history(envelope)
+
+
+@pytest.mark.parametrize("result_count", [1, 2, 2_147_483_648])
+def test_preview_accepts_withheld_rows_without_total_result_count(
+    result_count: int,
+) -> None:
+    envelope: dict[str, object] = {
+        "results": [],
+        "totalCost": "0.00",
+        "quantityFreeRemaining": 9866,
+        "resultCount": result_count,
+    }
+
+    parsed = parse_transaction_history(envelope, purchase_requested=False)
+
+    assert parsed.records == ()
+    assert parsed.records_withheld is True
+    assert parsed.result_count == result_count
+    assert parsed.billing.total_result_count is None
+    assert parsed.total_result_count == result_count
+    assert parsed.billing_status == "preview"
+
+
+@pytest.mark.parametrize("purchase_requested", [True, None])
+def test_charged_and_unknown_modes_never_accept_withheld_rows(
+    purchase_requested: bool | None,
+) -> None:
+    envelope: dict[str, object] = {
+        "results": [],
+        "totalCost": 0,
+        "resultCount": 2,
+        "totalResultCount": 2,
+    }
+    with pytest.raises(InvalidResponseError, match=r"\(result_count_mismatch\)"):
+        parse_transaction_history(envelope, purchase_requested=purchase_requested)
+
+
+@pytest.mark.parametrize("purchase_requested", [False, True, None])
+def test_empty_results_with_zero_result_count_are_never_withheld(
+    purchase_requested: bool | None,
+) -> None:
+    parsed = parse_transaction_history(
+        {"results": [], "totalCost": 0, "resultCount": 0},
+        purchase_requested=purchase_requested,
+    )
+
+    assert parsed.records == ()
+    assert parsed.records_withheld is False
+    assert parsed.result_count == 0
+    assert parsed.total_result_count == 0
+
+
+@pytest.mark.parametrize("purchase_requested", [False, True, None])
+def test_non_empty_results_must_match_result_count_in_every_mode(
+    purchase_requested: bool | None,
+) -> None:
+    envelope = envelope_for_purchase(purchase_requested, "1.00")
+    envelope["resultCount"] = 2
+    envelope["totalResultCount"] = 2
+    with pytest.raises(InvalidResponseError, match=r"\(result_count_mismatch\)"):
+        parse_transaction_history(envelope, purchase_requested=purchase_requested)
+
+
+def test_withheld_preview_rows_still_compose_current_owners() -> None:
+    parsed = parse_transaction_history(
+        live_transactions_preview_envelope(),
+        purchase_requested=False,
+        property_persons=synthetic_persons(
+            [{"RadarID": "P-SYNTHETIC", "PersonType": "Person", "FirstName": "SYN"}]
+        ),
+        radar_id="P-SYNTHETIC",
+    )
+
+    assert parsed.records == ()
+    assert parsed.records_withheld is True
+    owners = cast(tuple[TransactionParty, ...], parsed.current_owners)
+    assert len(owners) == 1
+    assert owners[0].first_name == "SYN"
+
+
+def test_new_model_fields_are_last_with_defaults_for_0_4_1_constructions() -> None:
+    assert [field.name for field in fields(TransactionBillingEvidence)] == [
+        "purchase_requested",
+        "status",
+        "total_cost",
+        "currency",
+        "quantity_free_remaining",
+        "result_count",
+        "request_id",
+        "total_result_count",
+    ]
+    assert [field.name for field in fields(TransactionHistory)] == [
+        "records",
+        "current_owners",
+        "billing",
+        "records_withheld",
+    ]
+    positional = TransactionBillingEvidence(
+        False, "preview", Decimal("0"), None, 9866, 2, None
+    )
+    assert positional == preview_billing()
+    assert positional.total_result_count is None
+    history = TransactionHistory((), None, positional)
+    assert history == TransactionHistory(
+        records=(), current_owners=None, billing=positional, records_withheld=False
+    )
+    assert history.records_withheld is False
+    assert history.total_result_count == 2
+    assert repr(history).startswith(
+        "TransactionHistory(record_count=0, records_withheld=False, "
+    )
+    assert repr(positional).endswith(
+        "result_count=2, total_result_count=None, request_id_available=False)"
+    )
+
+
+@pytest.mark.parametrize("total_result_count", [None, 2, 3, 2_147_483_648])
+def test_manual_billing_accepts_total_result_count_not_below_result_count(
+    total_result_count: int | None,
+) -> None:
+    billing = preview_billing(total_result_count=total_result_count)
+
+    history = TransactionHistory(records=(), current_owners=None, billing=billing)
+
+    assert billing.total_result_count == total_result_count
+    expected = 2 if total_result_count is None else total_result_count
+    assert history.total_result_count == expected
+
+
+@pytest.mark.parametrize(
+    "total_result_count",
+    [
+        pytest.param(True, id="bool-true"),
+        pytest.param(False, id="bool-false"),
+        pytest.param(-1, id="negative"),
+        pytest.param(0, id="below-result-count"),
+        pytest.param(1, id="one-below-result-count"),
+        pytest.param("3", id="string"),
+        pytest.param(3.0, id="float"),
+        pytest.param(IntegerSubclass(3), id="int-subclass"),
+    ],
+)
+def test_manual_billing_rejects_invalid_total_result_count(
+    total_result_count: object,
+) -> None:
+    with pytest.raises(
+        ValueError,
+        match="total_result_count must be None or a nonnegative integer "
+        "not less than result_count",
+    ):
+        preview_billing(total_result_count=total_result_count)
+
+
+def test_manual_history_accepts_records_withheld_for_an_empty_positive_preview() -> (
+    None
+):
+    withheld = TransactionHistory(
+        records=(),
+        current_owners=None,
+        billing=preview_billing(total_result_count=2),
+        records_withheld=True,
+    )
+
+    assert withheld.records_withheld is True
+    assert withheld == parse_transaction_history(
+        live_transactions_preview_envelope(), purchase_requested=False
+    )
+    assert replace(withheld, records_withheld=False).records_withheld is False
+
+
+@pytest.mark.parametrize(
+    "records_withheld",
+    [
+        pytest.param(1, id="int-one"),
+        pytest.param(0, id="int-zero"),
+        pytest.param("True", id="string"),
+        pytest.param(None, id="null"),
+    ],
+)
+def test_manual_history_rejects_a_non_boolean_records_withheld(
+    records_withheld: object,
+) -> None:
+    with pytest.raises(ValueError, match="records_withheld must be a boolean"):
+        TransactionHistory(
+            records=(),
+            current_owners=None,
+            billing=preview_billing(),
+            records_withheld=cast(bool, records_withheld),
+        )
+
+
+@pytest.mark.parametrize(
+    ("records", "billing"),
+    [
+        pytest.param(
+            (record_with_parties(grantors=None, grantees=None),),
+            preview_billing(),
+            id="records-present",
+        ),
+        pytest.param(
+            (),
+            TransactionBillingEvidence(
+                purchase_requested=True,
+                status="charged",
+                total_cost=Decimal("0"),
+                currency=None,
+                quantity_free_remaining=None,
+                result_count=2,
+                request_id=None,
+            ),
+            id="charged",
+        ),
+        pytest.param(
+            (),
+            TransactionBillingEvidence(
+                purchase_requested=None,
+                status="unknown",
+                total_cost=Decimal("0"),
+                currency=None,
+                quantity_free_remaining=None,
+                result_count=2,
+                request_id=None,
+            ),
+            id="unknown",
+        ),
+        pytest.param((), preview_billing(result_count=0), id="zero-result-count"),
+    ],
+)
+def test_manual_history_rejects_records_withheld_outside_an_empty_positive_preview(
+    records: tuple[TransactionHistoryRecord, ...],
+    billing: TransactionBillingEvidence,
+) -> None:
+    with pytest.raises(
+        ValueError,
+        match="records_withheld requires no records, preview status "
+        "and a positive result_count",
+    ):
+        TransactionHistory(
+            records=records,
+            current_owners=None,
+            billing=billing,
+            records_withheld=True,
+        )
