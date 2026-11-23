@@ -6,6 +6,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from typing import Literal, cast, overload
 
 from ..buyer_transfer import (
+    BUYER_TRANSFER_PREVIEW_FIELDS,
     BUYER_TRANSFER_PROPERTY_FIELDS,
     BuyerTransferMatchCriteria,
     BuyerTransferMatchResult,
@@ -528,12 +529,19 @@ class PropertiesResource(BaseResource):
     ) -> BuyerTransferMatchResult:
         """Return one typed Buyer-criterion linkage to an exact property.
 
-        The method builds the bounded public criteria, requests only the
-        immutable property identity/location field catalog, limits the search
-        to one exact RadarID, and strictly parses the response. A returned
-        linkage means that PropertyRadar matched the documented Buyer Name
-        (Grantee) criterion; it does not invent exact-name semantics or parse
-        scalar transaction-party displays.
+        The method builds the bounded public criteria, limits the search to one
+        exact RadarID, and strictly parses the response. A returned linkage
+        means that PropertyRadar matched the documented Buyer Name (Grantee)
+        criterion; it does not invent exact-name semantics or parse scalar
+        transaction-party displays.
+
+        A preview (``purchase=False``) requests only ``Fields=RadarID``, which
+        the API 5.3.1 Purchase parameter documents as never charged. A paid
+        call requests the full ``BUYER_TRANSFER_PROPERTY_FIELDS`` catalog. Both
+        calls add the residential ``PropertyType`` criterion (PType codes
+        ``BUYER_TRANSFER_RESIDENTIAL_PTYPE_CODES``) just before ``RadarID``.
+        That criterion follows the official criteria reference; it was not
+        live-probed on ``Purchase=0``.
 
         Args:
             criteria: Exact buyer, property, geography, and transfer windows.
@@ -541,7 +549,9 @@ class PropertiesResource(BaseResource):
                 client must also be configured with ``allow_charges=True``.
 
         Returns:
-            Immutable linkage, property location, and billing evidence.
+            Immutable linkage, property location, and billing evidence. A
+            preview linkage carries the RadarID and the criterion residential
+            basis only.
 
         Raises:
             TypeError: If ``purchase`` is not exactly a boolean. This is
@@ -561,7 +571,11 @@ class PropertiesResource(BaseResource):
             )
         envelope = self.search(
             criteria=build_buyer_transfer_match_criteria(criteria),
-            fields=BUYER_TRANSFER_PROPERTY_FIELDS,
+            fields=(
+                BUYER_TRANSFER_PROPERTY_FIELDS
+                if purchase
+                else BUYER_TRANSFER_PREVIEW_FIELDS
+            ),
             limit=1,
             start=0,
             purchase=purchase,
@@ -585,6 +599,12 @@ class PropertiesResource(BaseResource):
         paid calls require the client opt-in and are never retried. The result
         preserves five-digit ZIP strings without asserting a document/grantee
         association. Known optional response metadata is validated and discarded.
+
+        A preview (``purchase=False``) requests only ``Fields=RadarID``; a paid
+        call requests ``BUYER_TRANSFER_PROPERTY_FIELDS``. Both add the
+        residential ``PropertyType`` criterion just before ``RadarID``. That
+        criterion follows the official criteria reference; it was not
+        live-probed on ``Purchase=0``.
         """
         if type(purchase) is not bool:
             raise TypeError("purchase must be a boolean")
@@ -594,7 +614,11 @@ class PropertiesResource(BaseResource):
             raise ValueError("historical criteria require recording_date_range")
         envelope = self.search(
             criteria=build_buyer_transfer_match_criteria(criteria),
-            fields=BUYER_TRANSFER_PROPERTY_FIELDS,
+            fields=(
+                BUYER_TRANSFER_PROPERTY_FIELDS
+                if purchase
+                else BUYER_TRANSFER_PREVIEW_FIELDS
+            ),
             limit=1,
             start=0,
             purchase=purchase,
