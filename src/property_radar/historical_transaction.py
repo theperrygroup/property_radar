@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -69,6 +70,19 @@ HISTORICAL_TRANSACTION_FIELDS: tuple[HistoricalTransactionField, ...] = (
 _GROUPS = ("Mortgage", "Deed", "Foreclosure", "Lien", "Notice", "Release", "Other")
 _STATUSES = ("original", "edited", "deleted", "created")
 _COST = re.compile(r"[0-9]+(?:\.[0-9]+)?")
+_COST_MAX_LENGTH = 64
+_COST_INTEGER_LIMIT = 10**_COST_MAX_LENGTH
+_COST_TYPES = ("integer", "number", "string")
+_COST_REJECTED = (
+    "boolean",
+    "null",
+    "nan",
+    "infinity",
+    "negative",
+    "negative_zero",
+    "over_64_characters",
+    "other_types",
+)
 _DOC_TYPE = re.compile(r"[A-Z]{3}")
 _ENVELOPE_FIELDS = frozenset(
     ("results", "totalCost", "resultCount", "totalResultCount", "quantityFreeRemaining")
@@ -106,7 +120,14 @@ _CONTRACT_SOURCE: dict[str, object] = {
     "quote_records": "omitted_or_empty",
     "paid_records": "exactly_resultCount",
     "counts": "exact_nonnegative_json_integers",
-    "total_cost": "nonnegative_ascii_decimal_string_maximum_64_characters",
+    "total_cost": "nonnegative_decimal_maximum_64_characters",
+    "total_cost_types": _COST_TYPES,
+    "total_cost_pattern": _COST.pattern,
+    "total_cost_integer": "exact_int_minimum_0_maximum_64_digits",
+    "total_cost_number": (
+        "finite_float_minimum_0_decimal_repr_plain_form_matches_pattern"
+    ),
+    "total_cost_rejected": _COST_REJECTED,
     "currency": None,
     "required_envelope_fields": tuple(sorted(_REQUIRED_FIELDS)),
     "record_fields_required_by_provider": (),
@@ -631,16 +652,12 @@ def _billing_evidence(
     snapshot: Mapping[str, object], *, query: HistoricalTransactionQuery, purchase: bool
 ) -> HistoricalTransactionBillingEvidence:
     known = {key: value for key, value in snapshot.items() if type(key) is str}
-    raw_cost = known.get("totalCost")
-    cost = None
-    if type(raw_cost) is str and len(raw_cost) <= 64 and _COST.fullmatch(raw_cost):
-        cost = Decimal(raw_cost)
     selected = known.get("resultCount")
     total = known.get("totalResultCount")
     return HistoricalTransactionBillingEvidence(
         purchase_requested=purchase,
         scope_fingerprint=query.scope_fingerprint,
-        total_cost=cost,
+        total_cost=_cost_or_none(known.get("totalCost")),
         result_count=selected if type(selected) is int and selected >= 0 else None,
         total_result_count=total if type(total) is int and total >= 0 else None,
     )
@@ -688,9 +705,29 @@ def _count(value: object) -> int:
 
 
 def _cost(value: object) -> Decimal:
-    if type(value) is not str or len(value) > 64 or _COST.fullmatch(value) is None:
+    cost = _cost_or_none(value)
+    if cost is None:
         _invalid("total_cost")
-    return Decimal(value)
+    return cost
+
+
+def _cost_or_none(value: object) -> Decimal | None:
+    # One rule for parsers and failure evidence: an exact JSON integer, a
+    # finite float or an ASCII decimal string, nonnegative and within 64
+    # characters. Booleans, subclasses, NaN, infinities, negatives and -0.0
+    # are rejected; a float converts exactly from its shortest repr.
+    cost: Decimal | None = None
+    if type(value) is str:
+        if len(value) <= _COST_MAX_LENGTH and _COST.fullmatch(value) is not None:
+            cost = Decimal(value)
+    elif type(value) is int:
+        if 0 <= value < _COST_INTEGER_LIMIT:
+            cost = Decimal(value)
+    elif (
+        type(value) is float and math.isfinite(value) and math.copysign(1.0, value) > 0
+    ):
+        cost = Decimal(repr(value))
+    return cost if cost is not None and _valid_decimal(cost) else None
 
 
 def _valid_decimal(value: object) -> bool:

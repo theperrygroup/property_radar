@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -93,8 +94,20 @@ _TRANSACTION_ENVELOPE_KEYS = (
 _PARSER_REQUIRED_ENVELOPE_FIELDS = ("results", "totalCost", "resultCount")
 _REQUIRED_ENVELOPE_KEYS = frozenset(_PARSER_REQUIRED_ENVELOPE_FIELDS)
 _TOTAL_COST_MAX_LENGTH = 64
+_TOTAL_COST_INTEGER_LIMIT = 10**_TOTAL_COST_MAX_LENGTH
 _TOTAL_COST_PATTERN_SOURCE = r"[0-9]+(?:\.[0-9]+)?"
 _TOTAL_COST_PATTERN = re.compile(_TOTAL_COST_PATTERN_SOURCE)
+_TOTAL_COST_PROVIDER_TYPES = ("integer", "number", "string")
+_TOTAL_COST_REJECTED = (
+    "boolean",
+    "null",
+    "nan",
+    "infinity",
+    "negative",
+    "negative_zero",
+    "over_64_characters",
+    "other_types",
+)
 _REQUEST_ID_MAX_LENGTH = 128
 _REQUEST_ID_PATTERN_SOURCE = r"[A-Za-z0-9]+-[A-Za-z0-9]+-[A-Za-z0-9]+"
 _REQUEST_ID_PATTERN = re.compile(_REQUEST_ID_PATTERN_SOURCE)
@@ -105,7 +118,11 @@ _RECORD_FIELD_CONTRACT_SOURCE: dict[str, dict[str, object]] = {
 }
 _ENVELOPE_FIELD_CONTRACT_SOURCE: dict[str, dict[str, object]] = {
     "results": {"type": "array", "nullable": False, "required": False},
-    "totalCost": {"type": "string", "nullable": False, "required": False},
+    "totalCost": {
+        "type": _TOTAL_COST_PROVIDER_TYPES,
+        "nullable": False,
+        "required": False,
+    },
     "quantityFreeRemaining": {
         "type": "integer",
         "nullable": False,
@@ -186,7 +203,8 @@ _BILLING_EVIDENCE_SOURCE: dict[str, object] = {
     },
     "total_cost": {
         "provider_source": "totalCost",
-        "type": "decimal_string",
+        "type": "decimal",
+        "provider_types": _TOTAL_COST_PROVIDER_TYPES,
         "required_by_parser": True,
     },
     "currency": {
@@ -225,8 +243,12 @@ _PARSER_POLICY_SOURCE: dict[str, object] = {
     },
     "quantity_free_remaining": {"minimum": 0},
     "total_cost": {
+        "accepted_types": _TOTAL_COST_PROVIDER_TYPES,
         "fullmatch_pattern": _TOTAL_COST_PATTERN_SOURCE,
         "max_length": _TOTAL_COST_MAX_LENGTH,
+        "integer": "exact_int_minimum_0_maximum_64_digits",
+        "number": "finite_float_minimum_0_decimal_repr_plain_form_matches_pattern",
+        "rejected": _TOTAL_COST_REJECTED,
     },
     "empty_display_string": None,
     "whitespace_display_string": "preserve",
@@ -865,14 +887,39 @@ def _parse_nonnegative_integer(value: object, *, field_name: str) -> int:
 
 
 def _parse_total_cost(value: object) -> Decimal:
-    """Parse the documented decimal string without numeric coercion."""
-    if (
-        type(value) is not str
-        or len(value) > _TOTAL_COST_MAX_LENGTH
-        or _TOTAL_COST_PATTERN.fullmatch(value) is None
+    """Parse a bounded nonnegative cost from an exact JSON primitive.
+
+    Live responses send ``totalCost`` as a JSON integer; paid responses may
+    send a JSON number or a decimal string. An exact ``int`` needs at most 64
+    digits. A finite ``float`` converts exactly from its shortest ``repr``,
+    and that plain decimal form must match the documented pattern within 64
+    characters. A ``str`` must match the pattern within 64 characters.
+    Booleans, ``None``, subclasses, NaN, infinities, negative values,
+    ``-0.0`` and all other types fail closed with the ``total_cost`` reason.
+    """
+    cost: Decimal | None = None
+    if type(value) is str:
+        if (
+            len(value) <= _TOTAL_COST_MAX_LENGTH
+            and _TOTAL_COST_PATTERN.fullmatch(value) is not None
+        ):
+            cost = Decimal(value)
+    elif type(value) is int:
+        if 0 <= value < _TOTAL_COST_INTEGER_LIMIT:
+            cost = Decimal(value)
+    elif (
+        type(value) is float and math.isfinite(value) and math.copysign(1.0, value) > 0
     ):
+        candidate = Decimal(repr(value))
+        plain = format(candidate, "f")
+        if (
+            len(plain) <= _TOTAL_COST_MAX_LENGTH
+            and _TOTAL_COST_PATTERN.fullmatch(plain) is not None
+        ):
+            cost = candidate
+    if cost is None:
         _raise_invalid("total_cost")
-    return Decimal(value)
+    return cost
 
 
 def _sanitized_request_id(value: str | None) -> str | None:
