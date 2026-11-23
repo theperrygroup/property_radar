@@ -958,8 +958,8 @@ def _parse_nonnegative_integer(value: object, *, field_name: str) -> int:
 def _parse_total_cost(value: object) -> Decimal:
     """Parse a bounded nonnegative cost from an exact JSON primitive.
 
-    Live responses send ``totalCost`` as a JSON integer; paid responses may
-    send a JSON number or a decimal string. An exact ``int`` needs at most 64
+    ``totalCost`` can arrive as a JSON integer (a live preview sends ``0``),
+    a JSON number or a decimal string. An exact ``int`` needs at most 64
     digits. A finite ``float`` converts exactly from its shortest ``repr``,
     and that plain decimal form must match the documented pattern within 64
     characters. A ``str`` must match the pattern within 64 characters.
