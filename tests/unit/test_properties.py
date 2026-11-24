@@ -824,6 +824,79 @@ def test_transaction_history_with_persons_keeps_the_path_segment_error(
     assert captured == []
 
 
+@pytest.mark.parametrize(
+    ("purchase", "flag", "message"),
+    [
+        pytest.param(1, "no", "purchase must be a boolean", id="purchase_first"),
+        pytest.param(
+            True,
+            "no",
+            "property_persons_purchase_requested must be a boolean or None",
+            id="persons_flag_before_the_persons_data",
+        ),
+    ],
+)
+def test_transaction_history_type_checks_run_before_the_persons_check(
+    purchase: object, flag: object, message: str
+) -> None:
+    client, http_client, captured = recording_transactions_client(purchase=True)
+    try:
+        with pytest.raises(TypeError) as caught:
+            client.properties.transaction_history(
+                "P-SYNTHETIC",
+                purchase=purchase,  # type: ignore[arg-type]
+                property_persons={"results": {}, "resultCount": 0},
+                property_persons_purchase_requested=flag,  # type: ignore[arg-type]
+            )
+    finally:
+        http_client.close()
+
+    assert str(caught.value) == message
+    assert captured == []
+
+
+@pytest.mark.parametrize(
+    ("persons", "error"),
+    [
+        pytest.param(
+            {"results": {}, "resultCount": 0},
+            InvalidResponseError,
+            id="invalid_persons",
+        ),
+        pytest.param(paid_persons(), ChargeNotAllowedError, id="valid_persons"),
+        pytest.param(None, ChargeNotAllowedError, id="no_persons"),
+    ],
+)
+def test_transaction_history_checks_the_persons_data_before_the_charge_opt_in(
+    persons: dict[str, object] | None, error: type[Exception]
+) -> None:
+    calls = 0
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json=transactions_envelope(purchase=True))
+
+    client, http_client = make_client(handler, allow_charges=False)
+    try:
+        with pytest.raises(error) as caught:
+            client.properties.transaction_history(
+                "P-SYNTHETIC",
+                purchase=True,
+                property_persons=persons,
+            )
+    finally:
+        http_client.close()
+
+    # Invalid persons data fails first; valid data still needs the opt-in.
+    assert type(caught.value) is error
+    if error is InvalidResponseError:
+        assert str(caught.value) == TRANSACTION_HISTORY_ERROR.format(
+            "property_persons_results_type"
+        )
+    assert calls == 0
+
+
 @pytest.mark.parametrize("purchase", [False, True])
 def test_transaction_history_reports_owners_withheld_by_a_persons_preview(
     purchase: bool,
@@ -1554,6 +1627,110 @@ def test_buyer_purchase_still_needs_allow_charges_before_the_network(
     finally:
         http_client.close()
     assert calls == 0
+
+
+def call_buyer_method(
+    client: PropertyRadarClient, mode: str, *, criteria: object, purchase: object
+) -> BuyerMatchResult:
+    # Passes the caller's values as given, so the methods' own checks run.
+    if mode == "historical":
+        return client.properties.historical_buyer_transfer_match(
+            criteria=criteria,  # type: ignore[arg-type]
+            purchase=purchase,  # type: ignore[arg-type]
+        )
+    return client.properties.buyer_transfer_match(
+        criteria=criteria,  # type: ignore[arg-type]
+        purchase=purchase,  # type: ignore[arg-type]
+    )
+
+
+def recording_buyer_client(
+    mode: str,
+) -> tuple[PropertyRadarClient, httpx.Client, list[httpx.Request]]:
+    # Charges are allowed, so a check that ran too late would reach the
+    # transport and show up in the captured requests.
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(200, json=paid_buyer_envelope(mode))
+
+    client, http_client = make_client(handler, allow_charges=True)
+    return client, http_client, captured
+
+
+@pytest.mark.parametrize("purchase", [1, 0, None, "true"])
+@pytest.mark.parametrize("mode", BUYER_MODES)
+def test_buyer_methods_reject_a_non_boolean_purchase_before_the_network(
+    mode: str, purchase: object
+) -> None:
+    client, http_client, captured = recording_buyer_client(mode)
+    try:
+        with pytest.raises(TypeError) as caught:
+            call_buyer_method(
+                client, mode, criteria=buyer_criteria(mode), purchase=purchase
+            )
+    finally:
+        http_client.close()
+
+    assert str(caught.value) == "purchase must be a boolean"
+    assert captured == []
+
+
+INVALID_BUYER_CRITERIA = [
+    pytest.param(
+        "recent",
+        "P-SYNTHETIC",
+        TypeError,
+        "criteria must be BuyerTransferMatchCriteria",
+        id="recent_criteria_type",
+    ),
+    pytest.param(
+        "recent",
+        buyer_criteria("historical"),
+        ValueError,
+        "historical criteria require historical_buyer_transfer_match",
+        id="recent_with_a_recording_date_range",
+    ),
+    pytest.param(
+        "historical",
+        "P-SYNTHETIC",
+        TypeError,
+        "criteria must be BuyerTransferMatchCriteria",
+        id="historical_criteria_type",
+    ),
+    pytest.param(
+        "historical",
+        buyer_criteria("recent"),
+        ValueError,
+        "historical criteria require recording_date_range",
+        id="historical_without_a_recording_date_range",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("mode", "criteria", "error", "message"), INVALID_BUYER_CRITERIA
+)
+@pytest.mark.parametrize("purchase", [False, True])
+def test_buyer_methods_reject_invalid_criteria_before_the_network(
+    purchase: bool,
+    mode: str,
+    criteria: object,
+    error: type[Exception],
+    message: str,
+) -> None:
+    client, http_client, captured = recording_buyer_client(mode)
+    try:
+        with pytest.raises(error) as caught:
+            call_buyer_method(client, mode, criteria=criteria, purchase=purchase)
+    finally:
+        http_client.close()
+
+    assert type(caught.value) is error
+    assert str(caught.value) == message
+    # Neither the preview nor the billable request is sent.
+    assert captured == []
 
 
 @pytest.mark.parametrize(
