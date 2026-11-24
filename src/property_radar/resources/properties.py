@@ -613,10 +613,10 @@ class PropertiesResource(BaseResource):
                 is rejected before any network request.
             ChargeNotAllowedError: If ``purchase`` is true without the
                 client-level charge opt-in.
-            BuyerTransferResponseError: If the response is rejected after its
-                billing evidence is established, for example a paid record
-                that fails validation. Its ``billing_evidence`` carries the
-                cost and counts. It is an ``InvalidResponseError``.
+            BuyerTransferResponseError: If the returned record is rejected
+                after the billing evidence (cost and counts) is established,
+                in a preview or a paid call. Its ``billing_evidence`` carries
+                that evidence. It is an ``InvalidResponseError``.
             InvalidResponseError: If the response violates the public contract
                 before its billing evidence is established.
         """
@@ -691,10 +691,10 @@ class PropertiesResource(BaseResource):
                 is rejected before any network request.
             ChargeNotAllowedError: If ``purchase`` is true without the
                 client-level charge opt-in.
-            BuyerTransferResponseError: If the response is rejected after its
-                billing evidence is established, for example a paid record
-                that fails validation. Its ``billing_evidence`` carries the
-                cost and counts. It is an ``InvalidResponseError``.
+            BuyerTransferResponseError: If the returned record is rejected
+                after the billing evidence (cost and counts) is established,
+                in a preview or a paid call. Its ``billing_evidence`` carries
+                that evidence. It is an ``InvalidResponseError``.
             InvalidResponseError: If the response violates the public contract
                 before its billing evidence is established.
         """
