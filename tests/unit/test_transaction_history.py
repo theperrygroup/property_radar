@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import inspect
 import json
+import re
 import traceback
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import FrozenInstanceError, fields, replace
@@ -3473,3 +3474,208 @@ def test_preview_with_only_a_positive_total_withholds_rows_through_the_client() 
     assert history.result_count == 0
     assert history.total_result_count == 2
     assert len(requests) == 1
+
+
+# Manually constructed models stay fail closed outside the parser.
+
+
+def charged_billing_values(**changes: object) -> dict[str, Any]:
+    """Return valid manual charged-evidence values with the given changes."""
+    values: dict[str, Any] = {
+        "purchase_requested": True,
+        "status": "charged",
+        "total_cost": Decimal("1.00"),
+        "currency": None,
+        "quantity_free_remaining": None,
+        "result_count": 1,
+        "request_id": None,
+    }
+    values.update(changes)
+    return values
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        pytest.param(
+            {"purchase_requested": 1},
+            "purchase_requested must be bool or None",
+            id="int-purchase-context",
+        ),
+        pytest.param(
+            {"purchase_requested": "true"},
+            "purchase_requested must be bool or None",
+            id="string-purchase-context",
+        ),
+        pytest.param(
+            {"status": "free"},
+            "status is not a supported billing status",
+            id="unsupported-status",
+        ),
+        pytest.param(
+            {"status": "preview"},
+            "status does not match purchase_requested",
+            id="preview-status-for-a-purchase",
+        ),
+        pytest.param(
+            {"purchase_requested": None},
+            "status does not match purchase_requested",
+            id="charged-status-for-an-unknown-context",
+        ),
+        pytest.param(
+            {"total_cost": 1},
+            "total_cost must be a nonnegative finite Decimal",
+            id="int-cost",
+        ),
+        pytest.param(
+            {"total_cost": Decimal("NaN")},
+            "total_cost must be a nonnegative finite Decimal",
+            id="nan-cost",
+        ),
+        pytest.param(
+            {"total_cost": Decimal("Infinity")},
+            "total_cost must be a nonnegative finite Decimal",
+            id="infinite-cost",
+        ),
+        pytest.param(
+            {"total_cost": Decimal("-0.01")},
+            "total_cost must be a nonnegative finite Decimal",
+            id="negative-cost",
+        ),
+        pytest.param(
+            {"result_count": True},
+            "result_count must be a nonnegative integer",
+            id="bool-result-count",
+        ),
+        pytest.param(
+            {"result_count": -1},
+            "result_count must be a nonnegative integer",
+            id="negative-result-count",
+        ),
+        pytest.param(
+            {
+                "purchase_requested": False,
+                "status": "preview",
+                "quantity_free_remaining": -1,
+            },
+            "quantity_free_remaining must be a nonnegative integer or None",
+            id="negative-free-quantity",
+        ),
+        pytest.param(
+            {
+                "purchase_requested": False,
+                "status": "preview",
+                "quantity_free_remaining": "9866",
+            },
+            "quantity_free_remaining must be a nonnegative integer or None",
+            id="string-free-quantity",
+        ),
+        pytest.param(
+            {"quantity_free_remaining": 9866},
+            "charged evidence cannot include preview-only free quantity",
+            id="charged-free-quantity",
+        ),
+        pytest.param(
+            {"request_id": "synthetic request id"},
+            "request_id is not a sanitized correlation code",
+            id="unsanitized-request-id",
+        ),
+        pytest.param(
+            {"total_result_count": 0},
+            "total_result_count must be None or a nonnegative integer "
+            "not less than result_count",
+            id="total-below-result-count",
+        ),
+    ],
+)
+def test_manual_billing_evidence_rejects_contradictory_values(
+    changes: dict[str, object],
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=f"^{re.escape(message)}$"):
+        TransactionBillingEvidence(**charged_billing_values(**changes))
+
+
+def test_manual_billing_evidence_accepts_each_documented_context() -> None:
+    charged = TransactionBillingEvidence(
+        **charged_billing_values(request_id="abc-123-xyz", total_result_count=5)
+    )
+    preview = TransactionBillingEvidence(
+        **charged_billing_values(
+            purchase_requested=False, status="preview", quantity_free_remaining=0
+        )
+    )
+    unknown = TransactionBillingEvidence(
+        **charged_billing_values(
+            purchase_requested=None, status="unknown", quantity_free_remaining=9866
+        )
+    )
+
+    assert charged.request_id == "abc-123-xyz"
+    assert charged.total_result_count == 5
+    assert preview.quantity_free_remaining == 0
+    assert unknown.status == "unknown"
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        pytest.param(
+            {"records": []},
+            "records must be an immutable transaction tuple",
+            id="records-list",
+        ),
+        pytest.param(
+            {"records": (object(),)},
+            "records must be an immutable transaction tuple",
+            id="records-of-another-type",
+        ),
+        pytest.param(
+            {"current_owners": [party()]},
+            "current_owners must be a party tuple or None",
+            id="owners-list",
+        ),
+        pytest.param(
+            {"current_owners": (object(),)},
+            "current_owners must be a party tuple or None",
+            id="owners-of-another-type",
+        ),
+        pytest.param(
+            {"billing": object()},
+            "billing must be TransactionBillingEvidence",
+            id="billing-of-another-type",
+        ),
+    ],
+)
+def test_manual_history_rejects_mutable_or_foreign_containers(
+    changes: dict[str, object],
+    message: str,
+) -> None:
+    values: dict[str, Any] = {
+        "records": (),
+        "current_owners": None,
+        "billing": TransactionBillingEvidence(**charged_billing_values(result_count=0)),
+    }
+    values.update(changes)
+    with pytest.raises(ValueError, match=f"^{re.escape(message)}$"):
+        TransactionHistory(**values)
+
+
+@pytest.mark.parametrize("field_name", ["grantors", "grantees"])
+@pytest.mark.parametrize(
+    "parties",
+    [
+        pytest.param([], id="list"),
+        pytest.param((object(),), id="tuple-of-another-type"),
+    ],
+)
+def test_manual_record_rejects_mutable_or_foreign_party_containers(
+    field_name: str,
+    parties: object,
+) -> None:
+    record = record_with_parties(grantors=None, grantees=None)
+    changes: dict[str, Any] = {field_name: parties}
+    with pytest.raises(
+        ValueError, match=f"^{re.escape(field_name)} must be a party tuple or None$"
+    ):
+        replace(record, **changes)
