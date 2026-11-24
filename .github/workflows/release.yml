@@ -92,10 +92,10 @@ jobs:
 
           assert len(manifest_operations()) == 37
           assert TRANSACTION_HISTORY_CONTRACT["contract_fingerprint"] == (
-              "db0dd03413f298367f79749e522bd3e454e295cafcc68e7dd6d077085254e707"
+              "a9bed508d5f9210dc37f5ce3e1d61061cb87fe0a3dd19e4c991266d6fb1fb635"
           )
           assert BUYER_TRANSFER_MATCH_CONTRACT["contract_fingerprint"] == (
-              "0406f8ca5636c36eb834b273a4bc401293d52a91d34854874ad790a6edb12eeb"
+              "580b955265f3f7928ea1bddba03e7244ceaff8f27fd6844343e05d6ae81bc01c"
           )
           assert TransactionParty
           parsed = parse_transaction_history(
