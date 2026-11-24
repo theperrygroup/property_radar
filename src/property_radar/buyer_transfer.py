@@ -1,12 +1,21 @@
-"""Typed buyer/grantee search linkage with immutable property location."""
+"""Typed buyer/grantee search linkage with immutable property location.
+
+Only a non-billable ``Purchase=0`` preview carries the residential
+PropertyType criterion. That criterion follows the official API reference and
+has not been live-probed on ``Purchase=0``. A preview's ``matched=False`` also
+covers a non-residential or Unknown transfer that the provider dropped under
+the criterion. A paid ``Purchase=1`` request carries no PropertyType
+criterion, and a paid result classifies the property from the returned PType.
+"""
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import math
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
@@ -54,6 +63,7 @@ BuyerTransferResidentialBasis = Literal["property_type", "property_type_criterio
 
 _KeyT = TypeVar("_KeyT")
 _ValueT = TypeVar("_ValueT")
+_RecordT = TypeVar("_RecordT")
 
 BUYER_TRANSFER_PROPERTY_FIELDS: tuple[BuyerTransferPropertyField, ...] = (
     "RadarID",
@@ -85,10 +95,11 @@ BUYER_TRANSFER_RESIDENTIAL_PTYPE_CODES: tuple[str, ...] = (
     "APT",
     "RES",
 )
-"""Official PType codes of the PropertyType criterion on every match request.
+"""Official PType codes of the PropertyType criterion on every preview request.
 
 The codes map, in order, to the residential response PType names Single
-Family, Condominium, Multi-Family 2-4, Multi-Family 5+ and Other Res.
+Family, Condominium, Multi-Family 2-4, Multi-Family 5+ and Other Res. A paid
+``Purchase=1`` request carries no PropertyType criterion.
 """
 
 _BUYER_TRANSFER_ENVELOPE_FIELDS = (
@@ -111,6 +122,10 @@ _BUYER_TRANSFER_CRITERION_ORDER = (
     "TransferPublishedDate",
     "TransferRecDate",
     "isMostRecentMarketTransfer",
+    "RadarID",
+)
+_BUYER_TRANSFER_PREVIEW_CRITERION_ORDER = (
+    *_BUYER_TRANSFER_CRITERION_ORDER[:-1],
     "PropertyType",
     "RadarID",
 )
@@ -174,6 +189,10 @@ _RESIDENTIAL_BASES: tuple[BuyerTransferResidentialBasis, ...] = (
     "property_type",
     "property_type_criterion",
 )
+_PREVIEW_PROPERTY_TYPE_CRITERION: Criterion = {
+    "name": "PropertyType",
+    "value": [{"name": "PType", "value": list(BUYER_TRANSFER_RESIDENTIAL_PTYPE_CODES)}],
+}
 _PROPERTY_TYPE_CRITERION_SOURCE: dict[str, object] = {
     "criterion": "PropertyType",
     "subcriterion": "PType",
@@ -182,12 +201,9 @@ _PROPERTY_TYPE_CRITERION_SOURCE: dict[str, object] = {
     "documented_codes": _PROPERTY_TYPE_CODES,
     "documented_property_types": _PROPERTY_TYPES,
     "code_order_matches_property_type_order": True,
-    "shape": {
-        "name": "PropertyType",
-        "value": ({"name": "PType", "value": BUYER_TRANSFER_RESIDENTIAL_PTYPE_CODES},),
-    },
+    "shape": _PREVIEW_PROPERTY_TYPE_CRITERION,
     "position": "immediately_before_radar_id",
-    "requests": ("preview", "charged"),
+    "requests": ("preview",),
     "evidence": {
         "codes_source": "spec_query_parameter_PType_enum",
         "codes_source_operations": (
@@ -342,17 +358,77 @@ _PARSER_POLICY_SOURCE: dict[str, object] = {
     },
     "returned_radar_id_must_equal_criterion": True,
     "returned_fips_must_equal_county_criterion": True,
-    "returned_property_type_must_be_within_criterion": True,
+    "returned_property_type_must_be_within_criterion": {
+        "preview": True,
+        "charged_or_unknown": False,
+    },
     "residential_classification": {
-        "property_type_returned": {
-            "residential_basis": "property_type",
-            "allowed_values": tuple(_RESIDENTIAL_PROPERTY_TYPE_CODE_NAMES.values()),
-            "outside_criterion_reason": "property_type_outside_criterion",
+        "preview": {
+            "property_type_returned": {
+                "residential_basis": "property_type",
+                "allowed_values": tuple(_RESIDENTIAL_PROPERTY_TYPE_CODE_NAMES.values()),
+                "is_residential": True,
+                "outside_criterion_reason": "property_type_outside_criterion",
+            },
+            "property_type_not_returned": {
+                "residential_basis": "property_type_criterion",
+                "is_residential": True,
+            },
         },
-        "property_type_not_returned": {
-            "residential_basis": "property_type_criterion",
-            "is_residential": True,
+        "charged_or_unknown": {
+            "property_type_returned": {
+                "residential_basis": "property_type",
+                "residential_values": tuple(
+                    _RESIDENTIAL_PROPERTY_TYPE_CODE_NAMES.values()
+                ),
+                "non_residential_values": tuple(
+                    property_type
+                    for property_type in _PROPERTY_TYPES
+                    if property_type not in (*_RESIDENTIAL_PROPERTY_TYPES, "Unknown")
+                ),
+                "unknown_values": ("Unknown",),
+                "outside_criterion_reason": None,
+            },
+            "property_type_not_returned": {
+                "residential_basis": None,
+                "is_residential": None,
+            },
         },
+    },
+    "failure_billing_evidence": {
+        "error_type": "BuyerTransferResponseError",
+        "error_base_type": "InvalidResponseError",
+        "attribute": "billing_evidence",
+        "attribute_type": "BuyerTransferBillingEvidence",
+        "built_before_record": (
+            "envelope_fields",
+            "counts",
+            "quantity_free_remaining",
+            "total_cost",
+        ),
+        "carried_by": "every_record_rejection",
+        "record_rejection_reasons": (
+            "property_type",
+            "property_snapshot",
+            "property_key_type",
+            "undocumented_property_fields",
+            "missing_radar_id",
+            "radar_id",
+            "radar_id_mismatch",
+            "fips",
+            "fips_mismatch",
+            "property_type_outside_criterion",
+            "address",
+            "city",
+            "state",
+            "zip_five",
+            "county",
+            "apn",
+            "latitude",
+            "longitude",
+        ),
+        "earlier_rejection_type": "InvalidResponseError",
+        "message": "reason_code_only",
     },
     "missing_optional_fields": None,
     "preserve_provider_strings_exactly": True,
@@ -379,6 +455,7 @@ _CONTRACT_FINGERPRINT_SOURCE: dict[str, object] = {
         "most_recent_ownership_change_market_or_non_market"
     ),
     "criterion_order": _BUYER_TRANSFER_CRITERION_ORDER,
+    "preview_criterion_order": _BUYER_TRANSFER_PREVIEW_CRITERION_ORDER,
     "publication_window_values": (_PUBLICATION_WINDOW,),
     "recording_window_values": (_RECORDING_WINDOW,),
     "ordered_fields": BUYER_TRANSFER_PROPERTY_FIELDS,
@@ -449,6 +526,11 @@ _HISTORICAL_CONTRACT_FINGERPRINT_SOURCE: dict[str, object] = {
     "criterion_order": tuple(
         name
         for name in _BUYER_TRANSFER_CRITERION_ORDER
+        if name != "TransferPublishedDate"
+    ),
+    "preview_criterion_order": tuple(
+        name
+        for name in _BUYER_TRANSFER_PREVIEW_CRITERION_ORDER
         if name != "TransferPublishedDate"
     ),
     "publication_window_values": (),
@@ -677,11 +759,16 @@ class BuyerTransferProperty:
 
     @property
     def is_residential(self) -> bool | None:
-        """Classify residential use from PType or the request's type criterion.
+        """Classify residential use from PType or the preview's type criterion.
 
-        A record matched under the residential PropertyType criterion without a
-        returned PType is residential. Otherwise the documented broad property
-        type decides, and Unknown or a missing PType stays unknown.
+        A preview record matched under the residential PropertyType criterion
+        without a returned PType is residential. That criterion follows the
+        official API reference and has not been live-probed on ``Purchase=0``,
+        and a preview's ``matched=False`` also covers a non-residential or
+        Unknown transfer that the provider dropped under it. A paid or unknown
+        result classifies the property from the returned PType: the documented
+        broad property type decides, and Unknown or a missing PType stays
+        unknown.
         """
         return _classify_residential(self.property_type, self.residential_basis)
 
@@ -821,9 +908,33 @@ class BuyerTransferBillingEvidence:
         )
 
 
+class BuyerTransferResponseError(InvalidResponseError):
+    """A rejected buyer-transfer record with valid, privacy-safe billing data.
+
+    Both buyer-transfer parsers raise it for every rejection of the returned
+    record. They validate the envelope, the counts and ``totalCost`` first, so
+    ``billing_evidence`` keeps the cost and counts of a charged request. The
+    message holds only the reason code.
+    """
+
+    def __init__(
+        self, message: str, *, billing_evidence: BuyerTransferBillingEvidence
+    ) -> None:
+        """Attach immutable billing evidence without retaining the response."""
+        super().__init__(message)
+        self.billing_evidence = billing_evidence
+
+
 @dataclass(frozen=True, slots=True, repr=False)
 class BuyerTransferMatchResult:
-    """One exact buyer/grantee criterion outcome and its billing evidence."""
+    """One exact buyer/grantee criterion outcome and its billing evidence.
+
+    A preview's ``matched=False`` also covers a non-residential or Unknown
+    transfer that the provider dropped under the preview's residential
+    PropertyType criterion. That criterion follows the official API reference
+    and has not been live-probed on ``Purchase=0``. A paid result classifies
+    the property from the returned PType.
+    """
 
     contract_fingerprint: str
     scope_fingerprint: str
@@ -878,16 +989,30 @@ def _billing_returns_record(billing: BuyerTransferBillingEvidence) -> bool:
 
 def build_buyer_transfer_match_criteria(
     criteria: BuyerTransferMatchCriteria,
+    *,
+    preview: bool = False,
 ) -> tuple[Criterion, ...]:
     """Build the exact public PropertyRadar criteria for one property match.
 
-    Every request restricts the match to residential property types with the
-    official PropertyType criterion, placed just before the exact RadarID
-    criterion, which stays last. The criterion follows the official criteria
-    reference; its effect on ``Purchase=0`` previews has not been live-probed.
+    The default builds the criteria of a paid ``Purchase=1`` request, the
+    0.4.1 list with the exact RadarID criterion last. A paid result classifies
+    the property from the returned PType.
+
+    With ``preview=True`` the non-billable ``Purchase=0`` preview also
+    restricts the match to residential property types with the official
+    PropertyType criterion, placed just before RadarID, which stays last. That
+    criterion follows the official API reference and has not been live-probed
+    on ``Purchase=0``. So a preview's ``matched=False`` also covers a
+    non-residential or Unknown transfer that the provider dropped under it.
+
+    Raises:
+        TypeError: If ``criteria`` is not ``BuyerTransferMatchCriteria`` or
+            ``preview`` is not exactly a boolean.
     """
     if not isinstance(criteria, BuyerTransferMatchCriteria):
         raise TypeError("criteria must be BuyerTransferMatchCriteria")
+    if type(preview) is not bool:
+        raise TypeError("preview must be a boolean")
     built: list[Criterion] = [
         {"name": "State", "value": [criteria.state_code]},
         {"name": "County", "value": [int(criteria.county_fips)]},
@@ -913,14 +1038,8 @@ def build_buyer_transfer_match_criteria(
         built.append({"name": "TransferRecDate", "value": [criteria.recording_window]})
     if criteria.most_recent_change_of_ownership_only:
         built.append({"name": "isMostRecentMarketTransfer", "value": [1]})
-    built.append(
-        {
-            "name": "PropertyType",
-            "value": [
-                {"name": "PType", "value": list(BUYER_TRANSFER_RESIDENTIAL_PTYPE_CODES)}
-            ],
-        }
-    )
+    if preview:
+        built.append(copy.deepcopy(_PREVIEW_PROPERTY_TYPE_CRITERION))
     built.append({"name": "RadarID", "value": [criteria.radar_id]})
     return tuple(built)
 
@@ -930,13 +1049,15 @@ def buyer_transfer_scope_fingerprint(
 ) -> str:
     """Return a stable digest of the exact bounded request scope.
 
-    The digest binds the built criteria and both constant field sets, so the
+    The digest binds the paid request's criteria, the preview's PropertyType
+    criterion under a key of its own and both constant field sets, so the
     preview and the purchased parse of the same criteria share one value.
     """
     built = build_buyer_transfer_match_criteria(criteria)
     scope: dict[str, object] = {
         "operation": "properties.search",
         "criteria": list(built),
+        "preview_property_type_criterion": _PREVIEW_PROPERTY_TYPE_CRITERION,
         "fields": BUYER_TRANSFER_PROPERTY_FIELDS,
         "preview_fields": BUYER_TRANSFER_PREVIEW_FIELDS,
         "limit": 1,
@@ -973,6 +1094,20 @@ def parse_buyer_transfer_match(
     bare zero-hit preview ``{"results": []}`` and preview counts, where
     ``resultCount`` counts purchased rows and ``totalResultCount`` counts
     matches. Charged and unknown parses keep the exact count rule.
+
+    A preview carries the residential PropertyType criterion, which follows
+    the official API reference and has not been live-probed on
+    ``Purchase=0``. A returned preview PType must be residential, and a
+    preview's ``matched=False`` also covers a non-residential or Unknown
+    transfer that the provider dropped under the criterion. A paid or unknown
+    parse classifies the property from the returned PType alone.
+
+    Raises:
+        BuyerTransferResponseError: If the returned record is rejected after
+            the envelope, the counts and ``totalCost`` were validated. Its
+            ``billing_evidence`` carries that cost and those counts.
+        InvalidResponseError: If any earlier part of the response or an
+            argument violates the contract.
     """
     if not isinstance(criteria, BuyerTransferMatchCriteria):
         _raise_invalid("criteria_type")
@@ -1004,46 +1139,25 @@ def parse_buyer_transfer_match(
     raw_results = typed_envelope["results"]
     if not isinstance(raw_results, list):
         _raise_invalid("results_type")
-    result_snapshots = tuple(
-        _snapshot_string_mapping(
-            item,
-            object_reason="property_type",
-            snapshot_reason="property_snapshot",
-            key_reason="property_key_type",
-        )
-        for item in tuple(list.copy(raw_results))
-    )
-    if len(result_snapshots) > 1:
-        _raise_invalid("ambiguous_results")
-    result_count = _parse_match_count(
-        typed_envelope["resultCount"], field_name="result_count"
-    )
-    total_result_count = _parse_match_count(
-        typed_envelope["totalResultCount"], field_name="total_result_count"
-    )
-    _validate_match_counts(
-        returned_count=len(result_snapshots),
-        result_count=result_count,
-        total_result_count=total_result_count,
+    raw_records = tuple(list.copy(raw_results))
+    billing = _parse_match_billing(
+        typed_envelope,
+        returned_count=len(raw_records),
         purchase_requested=purchase_requested,
     )
 
-    quantity_free_remaining = None
-    if "quantityFreeRemaining" in typed_envelope:
-        quantity_free_remaining = _parse_nonnegative_integer(
-            typed_envelope["quantityFreeRemaining"],
-            field_name="quantity_free_remaining",
-        )
-    if purchase_requested is True and quantity_free_remaining is not None:
-        _raise_invalid("charged_preview_metadata")
-
     scope_fingerprint = buyer_transfer_scope_fingerprint(criteria)
     linkage = None
-    if result_snapshots:
-        property_result = _parse_property(
-            result_snapshots[0],
-            expected_radar_id=criteria.radar_id,
-            expected_county_fips=criteria.county_fips,
+    if raw_records:
+        property_result = _parse_billed_record(
+            raw_records[0],
+            lambda record: _parse_property(
+                record,
+                expected_radar_id=criteria.radar_id,
+                expected_county_fips=criteria.county_fips,
+                purchase_requested=purchase_requested,
+            ),
+            billing_evidence=billing,
         )
         linkage = BuyerTransferLinkage(
             scope_fingerprint=scope_fingerprint,
@@ -1056,16 +1170,78 @@ def parse_buyer_transfer_match(
         ),
         scope_fingerprint=scope_fingerprint,
         linkage=linkage,
-        billing=BuyerTransferBillingEvidence(
-            purchase_requested=purchase_requested,
-            status=_billing_status(purchase_requested),
-            total_cost=_parse_total_cost(typed_envelope["totalCost"]),
-            currency=None,
-            quantity_free_remaining=quantity_free_remaining,
-            result_count=result_count,
-            total_result_count=total_result_count,
-        ),
+        billing=billing,
     )
+
+
+def _parse_match_billing(
+    envelope: Mapping[str, object],
+    *,
+    returned_count: int,
+    purchase_requested: bool | None,
+) -> BuyerTransferBillingEvidence:
+    """Validate the counts, preview metadata and ``totalCost`` before the record.
+
+    No billing evidence exists yet, so each rejection here stays a plain
+    ``InvalidResponseError``.
+    """
+    if returned_count > 1:
+        _raise_invalid("ambiguous_results")
+    result_count = _parse_match_count(
+        envelope["resultCount"], field_name="result_count"
+    )
+    total_result_count = _parse_match_count(
+        envelope["totalResultCount"], field_name="total_result_count"
+    )
+    _validate_match_counts(
+        returned_count=returned_count,
+        result_count=result_count,
+        total_result_count=total_result_count,
+        purchase_requested=purchase_requested,
+    )
+    quantity_free_remaining = None
+    if "quantityFreeRemaining" in envelope:
+        quantity_free_remaining = _parse_nonnegative_integer(
+            envelope["quantityFreeRemaining"],
+            field_name="quantity_free_remaining",
+        )
+    if purchase_requested is True and quantity_free_remaining is not None:
+        _raise_invalid("charged_preview_metadata")
+    return BuyerTransferBillingEvidence(
+        purchase_requested=purchase_requested,
+        status=_billing_status(purchase_requested),
+        total_cost=_parse_total_cost(envelope["totalCost"]),
+        currency=None,
+        quantity_free_remaining=quantity_free_remaining,
+        result_count=result_count,
+        total_result_count=total_result_count,
+    )
+
+
+def _parse_billed_record(
+    raw_record: object,
+    parse: Callable[[Mapping[str, object]], _RecordT],
+    *,
+    billing_evidence: BuyerTransferBillingEvidence,
+) -> _RecordT:
+    """Snapshot and parse the returned record after billing was validated.
+
+    A rejection keeps its exact reason-code message and is raised again as
+    ``BuyerTransferResponseError`` with the billing evidence, outside the
+    handler, so the new error has no context.
+    """
+    try:
+        return parse(
+            _snapshot_string_mapping(
+                raw_record,
+                object_reason="property_type",
+                snapshot_reason="property_snapshot",
+                key_reason="property_key_type",
+            )
+        )
+    except InvalidResponseError as error:
+        message = str(error)
+    _raise_billed_invalid(message, billing_evidence)
 
 
 def _is_bare_preview_envelope(
@@ -1137,6 +1313,7 @@ def _parse_property(
     *,
     expected_radar_id: str,
     expected_county_fips: str,
+    purchase_requested: bool | None,
 ) -> BuyerTransferProperty:
     if set(record).difference(BUYER_TRANSFER_PROPERTY_FIELDS):
         _raise_invalid("undocumented_property_fields")
@@ -1148,7 +1325,9 @@ def _parse_property(
     fips = _parse_optional_fips(record)
     if fips is not None and int(fips) != int(expected_county_fips):
         _raise_invalid("fips_mismatch")
-    property_type, residential_basis = _parse_criterion_property_type(record)
+    property_type, residential_basis = _parse_residential_property_type(
+        record, purchase_requested=purchase_requested
+    )
     return BuyerTransferProperty(
         returned_fields=tuple(
             field_name
@@ -1180,11 +1359,21 @@ def _parse_property(
     )
 
 
-def _parse_criterion_property_type(
-    record: Mapping[str, object],
-) -> tuple[BuyerTransferPropertyType | None, BuyerTransferResidentialBasis]:
-    """Parse PType under the request's residential PropertyType criterion."""
+def _parse_residential_property_type(
+    record: Mapping[str, object], *, purchase_requested: bool | None
+) -> tuple[BuyerTransferPropertyType | None, BuyerTransferResidentialBasis | None]:
+    """Parse PType and the basis of its residential classification.
+
+    Only a preview carries the residential PropertyType criterion, so only a
+    preview rejects a returned type outside it and classifies a record
+    without PType as residential. A paid or unknown parse classifies from the
+    returned PType alone, and a missing PType stays unclassified.
+    """
     property_type = _parse_optional_property_type(record)
+    if purchase_requested is not False:
+        if property_type is None:
+            return None, None
+        return property_type, "property_type"
     if property_type is None:
         return None, "property_type_criterion"
     if property_type not in _RESIDENTIAL_PROPERTY_TYPES:
@@ -1207,8 +1396,8 @@ def _validate_residential_basis(
             raise ValueError(
                 "residential_basis property_type_criterion requires no PType"
             )
-    elif property_type not in _RESIDENTIAL_PROPERTY_TYPES:
-        raise ValueError("residential_basis property_type requires a residential PType")
+    elif property_type not in _PROPERTY_TYPES:
+        raise ValueError("residential_basis property_type requires a documented PType")
 
 
 def _classify_residential(
@@ -1357,6 +1546,12 @@ def _parse_total_cost(value: object) -> Decimal:
 
     Booleans, nulls, non-finite or negative numbers (``-0.0`` included),
     over-long values and every other type fail closed.
+
+    A JSON integer is always exact. A JSON number with a fraction or an
+    exponent is already a float when the parser sees it. Its Decimal equals
+    the number as written when it has at most 15 significant digits. A longer
+    number can already be rounded by JSON decoding before the library sees
+    it, and no such number is rejected for that reason.
     """
     parsed: Decimal | None = None
     if type(value) is str:
@@ -1391,4 +1586,12 @@ def _parse_total_cost_float(value: float) -> Decimal | None:
 def _raise_invalid(reason: str) -> NoReturn:
     raise InvalidResponseError(
         f"PropertyRadar returned invalid buyer-transfer match ({reason})."
+    ) from None
+
+
+def _raise_billed_invalid(
+    message: str, billing_evidence: BuyerTransferBillingEvidence
+) -> NoReturn:
+    raise BuyerTransferResponseError(
+        message, billing_evidence=billing_evidence
     ) from None
