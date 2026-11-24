@@ -4,6 +4,7 @@ import hashlib
 import inspect
 import json
 import re
+import sys
 import traceback
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import FrozenInstanceError, fields, replace
@@ -2361,8 +2362,13 @@ def test_truncated_is_a_read_only_computed_property_and_not_a_field() -> None:
         records_withheld=True,
     )
     assert withheld.truncated is False
-    with pytest.raises(AttributeError):
+    refused: tuple[type[Exception], ...] = (AttributeError,)
+    if sys.version_info < (3, 13):
+        # CPython 3.10 to 3.12: frozen slots dataclasses raise TypeError for non-fields.
+        refused = (AttributeError, TypeError)
+    with pytest.raises(refused):
         history.truncated = False  # type: ignore[misc]
+    assert history.truncated is True
     changes: dict[str, Any] = {"truncated": False}
     with pytest.raises(TypeError):
         replace(history, **changes)

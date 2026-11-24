@@ -67,6 +67,11 @@ evidence. The tests use synthetic values only and make no provider request.
   `records_withheld=True`. The `property_persons` envelope may carry
   `totalResultCount` too, under the same rule; `0.4.1` rejected it as an
   undocumented field.
+- `BuyerTransferResponseError` and `HistoricalTransactionResponseError` now
+  survive `pickle`, `copy.copy` and `copy.deepcopy` with their
+  `billing_evidence`, `status_code`, `request_id`, `retry_after` and
+  `__notes__`; the default exception reduce dropped the required keyword-only
+  `billing_evidence` and raised `TypeError`.
 
 ### Added
 
