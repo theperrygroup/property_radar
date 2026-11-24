@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import traceback
 from collections.abc import Callable, Iterator, Mapping
@@ -8,7 +9,7 @@ from dataclasses import FrozenInstanceError, fields, replace
 from decimal import Decimal
 from enum import IntEnum
 from types import MappingProxyType
-from typing import cast, get_type_hints
+from typing import Any, cast, get_type_hints
 
 import httpx
 import pytest
@@ -27,6 +28,9 @@ from property_radar import (
     TransactionParty,
     TransactionPartyKind,
     parse_transaction_history,
+)
+from property_radar.transaction_history import (
+    _validate_property_persons_composition,
 )
 
 EXPECTED_TRANSACTION_HISTORY_FIELDS = (
@@ -247,7 +251,13 @@ TRANSACTION_HISTORY_CONTRACT_FINGERPRINT_0_4_1 = (
     # pragma: allowlist nextline secret
     "d750039019a93bbfc0449b6eecdb47ea8f064e18a7dcfcbd01c3ec30c4e057a8"
 )
+# The review fixes add truncated, the positive-count withheld-row rule and the
+# property-persons preview rules to the parser policy, so 0.4.2 moves again.
 TRANSACTION_HISTORY_CONTRACT_FINGERPRINT_0_4_2 = (
+    # pragma: allowlist nextline secret
+    "a9bed508d5f9210dc37f5ce3e1d61061cb87fe0a3dd19e4c991266d6fb1fb635"
+)
+TRANSACTION_HISTORY_CONTRACT_FINGERPRINT_0_4_2_BEFORE_REVIEW = (
     # pragma: allowlist nextline secret
     "db0dd03413f298367f79749e522bd3e454e295cafcc68e7dd6d077085254e707"
 )
@@ -278,7 +288,13 @@ ACCEPTED_TOTAL_COSTS = [
     pytest.param(0.0, Decimal("0.0"), id="json-float-zero"),
     pytest.param(0.5, Decimal("0.5"), id="json-float-half"),
     pytest.param(1.25, Decimal("1.25"), id="json-float"),
+    pytest.param(1.5, Decimal("1.5"), id="json-float-one-and-a-half"),
     pytest.param(0.1, Decimal("0.1"), id="json-float-repr-not-binary"),
+    pytest.param(
+        0.30000000000000004,
+        Decimal("0.30000000000000004"),
+        id="json-float-17-significant-digits",
+    ),
     pytest.param(2.675, Decimal("2.675"), id="json-float-repr-not-rounded"),
     pytest.param(1e-7, Decimal("1E-7"), id="json-float-exponent-form"),
     pytest.param(1e63, Decimal("1E+63"), id="json-float-64-character-plain-form"),
@@ -323,7 +339,13 @@ ACCEPTED_WIRE_TOTAL_COSTS = [
     pytest.param("12", Decimal("12"), id="json-int"),
     pytest.param("0.5", Decimal("0.5"), id="json-float-half"),
     pytest.param("1.25", Decimal("1.25"), id="json-float"),
+    pytest.param("1.5", Decimal("1.5"), id="json-float-one-and-a-half"),
     pytest.param("0.1", Decimal("0.1"), id="json-float-repr-not-binary"),
+    pytest.param(
+        "0.30000000000000004",
+        Decimal("0.30000000000000004"),
+        id="json-float-17-significant-digits",
+    ),
     pytest.param("1e-7", Decimal("1E-7"), id="json-float-exponent-form"),
     pytest.param('"3.50"', Decimal("3.50"), id="json-decimal-string"),
 ]
@@ -540,6 +562,23 @@ def test_contract_is_current_deeply_immutable_and_fingerprinted() -> None:
         "number": "finite_float_minimum_0_decimal_repr_plain_form_matches_pattern",
         "rejected": TOTAL_COST_REJECTED_CLASSES,
     }
+    assert set(parser_policy) == {
+        "required_envelope_fields",
+        "reject_undocumented_envelope_fields",
+        "reject_undocumented_record_fields",
+        "exact_json_primitive_types",
+        "snapshot_before_validation",
+        "result_count",
+        "truncated",
+        "total_result_count",
+        "property_persons_envelope_fields",
+        "property_persons",
+        "quantity_free_remaining",
+        "total_cost",
+        "empty_display_string",
+        "whitespace_display_string",
+        "heuristic_name_splitting",
+    }
     assert parser_policy["result_count"] == {
         "minimum": 0,
         "must_match_records": True,
@@ -547,9 +586,14 @@ def test_contract_is_current_deeply_immutable_and_fingerprinted() -> None:
         "withheld_records": {
             "purchase_requested": False,
             "results": "empty",
-            "result_count": "positive",
+            "positive_count": ("result_count", "total_result_count"),
             "records_withheld": True,
         },
+    }
+    assert parser_policy["truncated"] == {
+        "stored": False,
+        "records_withheld": False,
+        "total_result_count": "greater_than_record_count",
     }
     assert parser_policy["total_result_count"] == {
         "required": False,
@@ -562,7 +606,36 @@ def test_contract_is_current_deeply_immutable_and_fingerprinted() -> None:
         "totalCost",
         "quantityFreeRemaining",
         "resultCount",
+        "totalResultCount",
     )
+    assert parser_policy["property_persons"] == {
+        "purchase_requested": {
+            "type": "boolean",
+            "nullable": True,
+            "requires_property_persons": True,
+        },
+        "result_count": {
+            "required": False,
+            "minimum": 0,
+            "must_match_people": True,
+        },
+        "total_result_count": {
+            "required": False,
+            "minimum": 0,
+            "not_less_than": "result_count",
+            "must_match_people": True,
+        },
+        "withheld_owners": {
+            "purchase_requested": False,
+            "results": "empty",
+            "positive_count": ("result_count", "total_result_count"),
+            "current_owners": None,
+            "current_owners_withheld": True,
+            "zero_counts": "empty_current_owners",
+            "missing_counts": "fail_closed",
+            "live_probed": False,
+        },
+    }
     fingerprint_source = {
         key: thaw_contract_value(value)
         for key, value in TRANSACTION_HISTORY_CONTRACT.items()
@@ -581,9 +654,10 @@ def test_contract_is_current_deeply_immutable_and_fingerprinted() -> None:
     assert TRANSACTION_HISTORY_CONTRACT["contract_fingerprint"] == (
         TRANSACTION_HISTORY_CONTRACT_FINGERPRINT_0_4_2
     )
-    assert TRANSACTION_HISTORY_CONTRACT["contract_fingerprint"] != (
-        TRANSACTION_HISTORY_CONTRACT_FINGERPRINT_0_4_1
-    )
+    assert TRANSACTION_HISTORY_CONTRACT["contract_fingerprint"] not in {
+        TRANSACTION_HISTORY_CONTRACT_FINGERPRINT_0_4_1,
+        TRANSACTION_HISTORY_CONTRACT_FINGERPRINT_0_4_2_BEFORE_REVIEW,
+    }
     assert_deeply_immutable(TRANSACTION_HISTORY_CONTRACT)
 
     contract = cast(dict[str, object], TRANSACTION_HISTORY_CONTRACT)
@@ -986,9 +1060,19 @@ def test_property_person_malformed_fields_fail_closed(
             "total_cost",
         ),
         (
-            {"results": [], "totalResultCount": 0},
+            {"results": [], "totalResultCount": True},
             "P-SYNTHETIC",
-            "property_persons_undocumented_envelope_fields",
+            "property_persons_total_result_count",
+        ),
+        (
+            {"results": [], "totalResultCount": 1},
+            "P-SYNTHETIC",
+            "property_persons_total_result_count_mismatch",
+        ),
+        (
+            {"results": [], "resultCount": 1, "totalResultCount": 0},
+            "P-SYNTHETIC",
+            "property_persons_total_result_count_mismatch",
         ),
         (
             {"results": [], "quantityFreeRemaining": -1},
@@ -1478,8 +1562,13 @@ def test_live_transactions_preview_envelope_parses_with_withheld_rows() -> None:
         total_result_count=2,
     )
     assert envelope == live_transactions_preview_envelope()
-    assert repr(parsed).startswith(
+    assert parsed.truncated is False
+    assert parsed.current_owners_withheld is False
+    assert repr(parsed) == (
         "TransactionHistory(record_count=0, records_withheld=True, "
+        "truncated=False, current_owners_available=False, "
+        "current_owner_count=None, current_owners_withheld=False, "
+        f"billing={parsed.billing!r})"
     )
     assert repr(parsed.billing).endswith(
         "result_count=2, total_result_count=2, request_id_available=False)"
@@ -1850,6 +1939,7 @@ def test_new_model_fields_are_last_with_defaults_for_0_4_1_constructions() -> No
         "current_owners",
         "billing",
         "records_withheld",
+        "current_owners_withheld",
     ]
     positional = TransactionBillingEvidence(
         False, "preview", Decimal("0"), None, 9866, 2, None
@@ -1858,12 +1948,19 @@ def test_new_model_fields_are_last_with_defaults_for_0_4_1_constructions() -> No
     assert positional.total_result_count is None
     history = TransactionHistory((), None, positional)
     assert history == TransactionHistory(
-        records=(), current_owners=None, billing=positional, records_withheld=False
+        records=(),
+        current_owners=None,
+        billing=positional,
+        records_withheld=False,
+        current_owners_withheld=False,
     )
     assert history.records_withheld is False
+    assert history.current_owners_withheld is False
     assert history.total_result_count == 2
+    assert history.truncated is True
     assert repr(history).startswith(
         "TransactionHistory(record_count=0, records_withheld=False, "
+        "truncated=True, "
     )
     assert repr(positional).endswith(
         "result_count=2, total_result_count=None, request_id_available=False)"
@@ -1980,6 +2077,11 @@ def test_manual_history_rejects_a_non_boolean_records_withheld(
             id="unknown",
         ),
         pytest.param((), preview_billing(result_count=0), id="zero-result-count"),
+        pytest.param(
+            (),
+            preview_billing(result_count=0, total_result_count=0),
+            id="zero-result-count-and-zero-total-result-count",
+        ),
     ],
 )
 def test_manual_history_rejects_records_withheld_outside_an_empty_positive_preview(
@@ -1988,8 +2090,8 @@ def test_manual_history_rejects_records_withheld_outside_an_empty_positive_previ
 ) -> None:
     with pytest.raises(
         ValueError,
-        match="records_withheld requires no records, preview status "
-        "and a positive result_count",
+        match="^records_withheld requires no records, preview status "
+        "and a positive result_count or total_result_count$",
     ):
         TransactionHistory(
             records=records,
