@@ -11,6 +11,7 @@ criterion, and a paid result classifies the property from the returned PType.
 from __future__ import annotations
 
 import copy
+import functools
 import hashlib
 import json
 import math
@@ -20,7 +21,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
 from types import MappingProxyType
-from typing import Literal, NoReturn, TypeVar, cast
+from typing import Any, Literal, NoReturn, TypeVar, cast
 
 from .exceptions import InvalidResponseError
 from .types import Criterion
@@ -914,7 +915,8 @@ class BuyerTransferResponseError(InvalidResponseError):
     Both buyer-transfer parsers raise it for every rejection of the returned
     record. They validate the envelope, the counts and ``totalCost`` first, so
     ``billing_evidence`` keeps the cost and counts of a charged request. The
-    message holds only the reason code.
+    message holds only the reason code. The error pickles and copies with its
+    billing evidence.
     """
 
     def __init__(
@@ -923,6 +925,14 @@ class BuyerTransferResponseError(InvalidResponseError):
         """Attach immutable billing evidence without retaining the response."""
         super().__init__(message)
         self.billing_evidence = billing_evidence
+
+    def __reduce__(self) -> tuple[Any, ...]:
+        """Rebuild through ``__init__`` with the same billing evidence and state."""
+        return (
+            functools.partial(type(self), billing_evidence=self.billing_evidence),
+            self.args,
+            self.__dict__,
+        )
 
 
 @dataclass(frozen=True, slots=True, repr=False)
