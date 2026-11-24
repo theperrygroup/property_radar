@@ -6,6 +6,7 @@ It performs no I/O, authorization, retry, party matching, or date inference.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import math
@@ -15,7 +16,7 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 from types import MappingProxyType
-from typing import Literal, NoReturn, cast
+from typing import Any, Literal, NoReturn, cast
 
 from .exceptions import InvalidResponseError
 
@@ -529,7 +530,10 @@ class HistoricalTransactionBillingEvidence:
 
 
 class HistoricalTransactionResponseError(InvalidResponseError):
-    """A rejected response with independently valid, privacy-safe billing data."""
+    """A rejected response with independently valid, privacy-safe billing data.
+
+    The error pickles and copies with its billing evidence.
+    """
 
     def __init__(
         self, message: str, *, billing_evidence: HistoricalTransactionBillingEvidence
@@ -537,6 +541,14 @@ class HistoricalTransactionResponseError(InvalidResponseError):
         """Attach immutable billing evidence without retaining the response."""
         super().__init__(message)
         self.billing_evidence = billing_evidence
+
+    def __reduce__(self) -> tuple[Any, ...]:
+        """Rebuild through ``__init__`` with the same billing evidence and state."""
+        return (
+            functools.partial(type(self), billing_evidence=self.billing_evidence),
+            self.args,
+            self.__dict__,
+        )
 
 
 def parse_historical_transaction_quote(
