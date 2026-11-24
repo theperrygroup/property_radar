@@ -28,6 +28,7 @@ from ..historical_transaction import (
 from ..transaction_history import (
     TRANSACTION_HISTORY_FIELDS,
     TransactionHistory,
+    _validate_property_persons_composition,
     parse_transaction_history,
 )
 from ..types import Criterion, JSONDict, JSONValue, ResponseEnvelope
@@ -476,15 +477,22 @@ class PropertiesResource(BaseResource):
         filter_by: Literal["CurrentOwner", "All"] | None = None,
         purchase: bool = False,
         property_persons: Mapping[str, object] | None = None,
+        property_persons_purchase_requested: bool | None = None,
     ) -> TransactionHistory:
         """Return strictly parsed transaction history without changing raw calls.
 
         The method requests the exact public transaction field catalog and
         supplies the known purchase flag to the billing parser. For structured
         current-owner evidence, first call :meth:`persons` with
-        ``PROPERTY_PERSON_IDENTITY_FIELDS`` and pass that raw envelope as
-        ``property_persons``. The parser verifies every returned ``RadarID``
-        and keeps current owners separate from unlinked transaction parties.
+        ``PROPERTY_PERSON_IDENTITY_FIELDS``, then pass that raw envelope as
+        ``property_persons`` and that call's ``purchase`` choice as
+        ``property_persons_purchase_requested``. The parser verifies every
+        returned ``RadarID`` and keeps current owners separate from unlinked
+        transaction parties.
+
+        The caller's ``property_persons`` data is checked completely before
+        any request. Invalid persons data therefore never sends the
+        transactions request, and never a billable one.
 
         Args:
             radar_id: Unique PropertyRadar property identifier.
@@ -494,20 +502,56 @@ class PropertiesResource(BaseResource):
                 must also be configured with ``allow_charges=True``.
             property_persons: Optional raw dedicated property-person response
                 for the same ``radar_id``.
+            property_persons_purchase_requested: The exact ``purchase`` choice
+                of the :meth:`persons` call that returned ``property_persons``,
+                or ``None`` when it is unknown. With ``False``, an empty
+                persons preview with a positive count gives
+                ``current_owners=None`` and ``current_owners_withheld=True``.
+                Set it only together with ``property_persons``.
 
         Returns:
             Immutable typed transaction history and billing evidence.
 
         Raises:
-            TypeError: If ``purchase`` is not exactly a boolean. This is
-                rejected before any network request.
+            TypeError: If ``purchase`` is not exactly a boolean, or if
+                ``property_persons_purchase_requested`` is neither ``None``
+                nor exactly a boolean. This is rejected before any network
+                request.
+            ValueError: If ``property_persons_purchase_requested`` is set
+                while ``property_persons`` is ``None``. This is rejected
+                before any network request.
+            ConfigurationError: If ``radar_id`` is empty or is an exact dot
+                path segment. This is rejected before any network request.
             ChargeNotAllowedError: If ``purchase`` is true without the
                 client-level charge opt-in.
-            InvalidResponseError: If the provider response or optional
-                composition violates the bound public contract.
+            InvalidResponseError: If ``property_persons`` or ``radar_id`` fails
+                the persons composition checks, which run before any network
+                request, or if the transactions response violates the bound
+                public contract.
         """
         if type(purchase) is not bool:
             raise TypeError("purchase must be a boolean")
+        if (
+            property_persons_purchase_requested is not None
+            and type(property_persons_purchase_requested) is not bool
+        ):
+            raise TypeError(
+                "property_persons_purchase_requested must be a boolean or None"
+            )
+        if property_persons_purchase_requested is not None and property_persons is None:
+            raise ValueError(
+                "property_persons_purchase_requested requires property_persons"
+            )
+        if property_persons is not None:
+            # The transactions call raises this path error before any request;
+            # keep it ahead of the composition check, which then rejects bad
+            # persons data before a (possibly billable) request is sent.
+            encode_path_segment(radar_id)
+            _validate_property_persons_composition(
+                property_persons,
+                radar_id=radar_id,
+                purchase_requested=property_persons_purchase_requested,
+            )
         envelope = self.transactions(
             radar_id,
             fields=TRANSACTION_HISTORY_FIELDS,
@@ -519,6 +563,7 @@ class PropertiesResource(BaseResource):
             purchase_requested=purchase,
             property_persons=property_persons,
             radar_id=radar_id,
+            property_persons_purchase_requested=property_persons_purchase_requested,
         )
 
     def buyer_transfer_match(
@@ -536,12 +581,18 @@ class PropertiesResource(BaseResource):
         transaction-party displays.
 
         A preview (``purchase=False``) requests only ``Fields=RadarID``, which
-        the API 5.3.1 Purchase parameter documents as never charged. A paid
-        call requests the full ``BUYER_TRANSFER_PROPERTY_FIELDS`` catalog. Both
-        calls add the residential ``PropertyType`` criterion (PType codes
+        the API 5.3.1 Purchase parameter documents as never charged, and adds
+        the residential ``PropertyType`` criterion (PType codes
         ``BUYER_TRANSFER_RESIDENTIAL_PTYPE_CODES``) just before ``RadarID``.
         That criterion follows the official criteria reference; it was not
-        live-probed on ``Purchase=0``.
+        live-probed on ``Purchase=0``. A preview's ``matched=False`` therefore
+        also covers a non-residential or ``Unknown`` transfer that the
+        provider dropped under the criterion.
+
+        A paid call (``purchase=True``) sends the 0.4.1 criteria list, without
+        the ``PropertyType`` criterion, and requests the full
+        ``BUYER_TRANSFER_PROPERTY_FIELDS`` catalog. It classifies the property
+        from the returned ``PType``.
 
         Args:
             criteria: Exact buyer, property, geography, and transfer windows.
@@ -550,15 +601,24 @@ class PropertiesResource(BaseResource):
 
         Returns:
             Immutable linkage, property location, and billing evidence. A
-            preview linkage carries the RadarID and the criterion residential
-            basis only.
+            preview requests the RadarID only, so its linkage normally carries
+            the RadarID and the criterion residential basis only.
 
         Raises:
-            TypeError: If ``purchase`` is not exactly a boolean. This is
-                rejected before any network request.
+            TypeError: If ``purchase`` is not exactly a boolean or ``criteria``
+                is not ``BuyerTransferMatchCriteria``. Both are rejected
+                before any network request.
+            ValueError: If ``criteria`` has a ``recording_date_range``. Such
+                criteria require :meth:`historical_buyer_transfer_match`. This
+                is rejected before any network request.
             ChargeNotAllowedError: If ``purchase`` is true without the
                 client-level charge opt-in.
-            InvalidResponseError: If the response violates the public contract.
+            BuyerTransferResponseError: If the response is rejected after its
+                billing evidence is established, for example a paid record
+                that fails validation. Its ``billing_evidence`` carries the
+                cost and counts. It is an ``InvalidResponseError``.
+            InvalidResponseError: If the response violates the public contract
+                before its billing evidence is established.
         """
         if type(purchase) is not bool:
             raise TypeError("purchase must be a boolean")
@@ -570,7 +630,9 @@ class PropertiesResource(BaseResource):
                 "historical criteria require historical_buyer_transfer_match"
             )
         envelope = self.search(
-            criteria=build_buyer_transfer_match_criteria(criteria),
+            criteria=build_buyer_transfer_match_criteria(
+                criteria, preview=not purchase
+            ),
             fields=(
                 BUYER_TRANSFER_PROPERTY_FIELDS
                 if purchase
@@ -600,11 +662,41 @@ class PropertiesResource(BaseResource):
         preserves five-digit ZIP strings without asserting a document/grantee
         association. Known optional response metadata is validated and discarded.
 
-        A preview (``purchase=False``) requests only ``Fields=RadarID``; a paid
-        call requests ``BUYER_TRANSFER_PROPERTY_FIELDS``. Both add the
-        residential ``PropertyType`` criterion just before ``RadarID``. That
-        criterion follows the official criteria reference; it was not
-        live-probed on ``Purchase=0``.
+        A preview (``purchase=False``) requests only ``Fields=RadarID`` and
+        adds the residential ``PropertyType`` criterion just before
+        ``RadarID``. That criterion follows the official criteria reference;
+        it was not live-probed on ``Purchase=0``. A preview's
+        ``matched=False`` therefore also covers a non-residential or
+        ``Unknown`` transfer that the provider dropped under the criterion. A
+        paid call (``purchase=True``) sends the 0.4.1 criteria list, without
+        the ``PropertyType`` criterion, and requests
+        ``BUYER_TRANSFER_PROPERTY_FIELDS``. It classifies the property from
+        the returned ``PType``.
+
+        Args:
+            criteria: Exact buyer, property, geography, and an exact
+                ``recording_date_range``.
+            purchase: Whether to purchase the returned property record. The
+                client must also be configured with ``allow_charges=True``.
+
+        Returns:
+            Immutable historical linkage, property location, and billing
+            evidence.
+
+        Raises:
+            TypeError: If ``purchase`` is not exactly a boolean or ``criteria``
+                is not ``BuyerTransferMatchCriteria``. Both are rejected
+                before any network request.
+            ValueError: If ``criteria`` has no ``recording_date_range``. This
+                is rejected before any network request.
+            ChargeNotAllowedError: If ``purchase`` is true without the
+                client-level charge opt-in.
+            BuyerTransferResponseError: If the response is rejected after its
+                billing evidence is established, for example a paid record
+                that fails validation. Its ``billing_evidence`` carries the
+                cost and counts. It is an ``InvalidResponseError``.
+            InvalidResponseError: If the response violates the public contract
+                before its billing evidence is established.
         """
         if type(purchase) is not bool:
             raise TypeError("purchase must be a boolean")
@@ -613,7 +705,9 @@ class PropertiesResource(BaseResource):
         if criteria.recording_date_range is None:
             raise ValueError("historical criteria require recording_date_range")
         envelope = self.search(
-            criteria=build_buyer_transfer_match_criteria(criteria),
+            criteria=build_buyer_transfer_match_criteria(
+                criteria, preview=not purchase
+            ),
             fields=(
                 BUYER_TRANSFER_PROPERTY_FIELDS
                 if purchase

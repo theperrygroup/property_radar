@@ -26,10 +26,16 @@ class Criterion(_RequiredCriterion, total=False):
 
 
 class ResponseEnvelope(TypedDict, total=False):
-    """Stable fields shared by documented PropertyRadar response envelopes."""
+    """Stable fields shared by documented PropertyRadar response envelopes.
+
+    ``totalCost`` arrives as a decimal string, as a JSON integer (a live
+    preview sends ``0``) or as a JSON number with a fraction or an exponent,
+    which JSON decoding gives as a ``float``. The typed parsers accept each
+    form and return a ``Decimal``.
+    """
 
     results: list[JSONDict]
-    totalCost: str
+    totalCost: str | int | float
     quantityFreeRemaining: int
     resultCount: int
     totalResultCount: int
