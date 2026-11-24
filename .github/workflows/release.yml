@@ -92,10 +92,10 @@ jobs:
 
           assert len(manifest_operations()) == 37
           assert TRANSACTION_HISTORY_CONTRACT["contract_fingerprint"] == (
-              "d750039019a93bbfc0449b6eecdb47ea8f064e18a7dcfcbd01c3ec30c4e057a8"
+              "a9bed508d5f9210dc37f5ce3e1d61061cb87fe0a3dd19e4c991266d6fb1fb635"
           )
           assert BUYER_TRANSFER_MATCH_CONTRACT["contract_fingerprint"] == (
-              "299cfaba5ddfc8337a290352433969f1f1363fa1a545080773761c2c99d2c8be"
+              "580b955265f3f7928ea1bddba03e7244ceaff8f27fd6844343e05d6ae81bc01c"
           )
           assert TransactionParty
           parsed = parse_transaction_history(
@@ -122,7 +122,7 @@ jobs:
               purchase_requested=False,
           )
           assert buyer_match.matched
-          assert property_radar.__version__ == "0.4.1"
+          assert property_radar.__version__ == "0.4.2"
           historical = BuyerTransferMatchCriteria(
               buyer_name="Synthetic Buyer", radar_id="P-SYNTHETIC",
               state_code="UT", county_fips="49035", publication_window=None,
@@ -162,6 +162,39 @@ jobs:
           assert quote.truncated and selected.truncated
           assert len(selected.records) == 2
           assert quote.scope_fingerprint == selected.scope_fingerprint
+          live_hit = parse_buyer_transfer_match(
+              {
+                  "results": [{"RadarID": "P-SYNTHETIC"}],
+                  "totalCost": 0,
+                  "quantityFreeRemaining": 100,
+                  "resultCount": 0,
+                  "totalResultCount": 1,
+              },
+              criteria=criteria,
+              purchase_requested=False,
+          )
+          assert live_hit.matched
+          assert live_hit.linkage.property.is_residential is True
+          bare = parse_buyer_transfer_match(
+              {"results": []}, criteria=criteria, purchase_requested=False,
+          )
+          assert not bare.matched and bare.billing.provider_metadata_omitted
+          bare_historical = parse_historical_buyer_transfer_match(
+              {"results": []}, criteria=historical, purchase_requested=False,
+          )
+          assert not bare_historical.matched
+          live_envelope = {
+              "results": [], "totalCost": 0, "quantityFreeRemaining": 9866,
+              "resultCount": 2, "totalResultCount": 2,
+          }
+          withheld = parse_transaction_history(
+              dict(live_envelope), purchase_requested=False,
+          )
+          assert withheld.records_withheld and withheld.total_result_count == 2
+          live_quote = parse_historical_transaction_quote(
+              dict(live_envelope), query=transaction_query,
+          )
+          assert live_quote.total_cost == 0 and live_quote.total_result_count == 2
           PY
 
       - name: Upload immutable release artifact

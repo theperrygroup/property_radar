@@ -4,7 +4,7 @@ import property_radar
 
 
 def test_installed_version_uses_package_metadata() -> None:
-    assert property_radar.__version__ == "0.4.1"
+    assert property_radar.__version__ == "0.4.2"
 
 
 def test_typing_marker_is_packaged() -> None:
@@ -37,7 +37,9 @@ def test_transaction_history_public_exports_are_available() -> None:
 def test_buyer_transfer_public_exports_are_available() -> None:
     expected = {
         "BUYER_TRANSFER_MATCH_CONTRACT",
+        "BUYER_TRANSFER_PREVIEW_FIELDS",
         "BUYER_TRANSFER_PROPERTY_FIELDS",
+        "BUYER_TRANSFER_RESIDENTIAL_PTYPE_CODES",
         "BuyerTransferBillingEvidence",
         "BuyerTransferBillingStatus",
         "BuyerTransferLinkage",
@@ -49,6 +51,8 @@ def test_buyer_transfer_public_exports_are_available() -> None:
         "BuyerTransferPropertyType",
         "BuyerTransferPublicationWindow",
         "BuyerTransferRecordingWindow",
+        "BuyerTransferResidentialBasis",
+        "BuyerTransferResponseError",
         "build_buyer_transfer_match_criteria",
         "buyer_transfer_scope_fingerprint",
         "parse_buyer_transfer_match",
@@ -56,3 +60,14 @@ def test_buyer_transfer_public_exports_are_available() -> None:
 
     assert expected.issubset(property_radar.__all__)
     assert all(hasattr(property_radar, name) for name in expected)
+
+
+def test_buyer_transfer_response_error_is_exported_as_an_invalid_response() -> None:
+    from property_radar import buyer_transfer, exceptions
+
+    error_type = property_radar.BuyerTransferResponseError
+
+    assert error_type is buyer_transfer.BuyerTransferResponseError
+    assert issubclass(error_type, exceptions.InvalidResponseError)
+    assert issubclass(error_type, property_radar.InvalidResponseError)
+    assert not issubclass(error_type, property_radar.HistoricalTransactionResponseError)

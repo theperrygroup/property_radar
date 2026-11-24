@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -89,12 +90,26 @@ _TRANSACTION_ENVELOPE_KEYS = (
     "totalCost",
     "quantityFreeRemaining",
     "resultCount",
+    "totalResultCount",
 )
+_PROPERTY_PERSONS_ENVELOPE_KEYS = _TRANSACTION_ENVELOPE_KEYS
 _PARSER_REQUIRED_ENVELOPE_FIELDS = ("results", "totalCost", "resultCount")
 _REQUIRED_ENVELOPE_KEYS = frozenset(_PARSER_REQUIRED_ENVELOPE_FIELDS)
 _TOTAL_COST_MAX_LENGTH = 64
+_TOTAL_COST_INTEGER_LIMIT = 10**_TOTAL_COST_MAX_LENGTH
 _TOTAL_COST_PATTERN_SOURCE = r"[0-9]+(?:\.[0-9]+)?"
 _TOTAL_COST_PATTERN = re.compile(_TOTAL_COST_PATTERN_SOURCE)
+_TOTAL_COST_PROVIDER_TYPES = ("integer", "number", "string")
+_TOTAL_COST_REJECTED = (
+    "boolean",
+    "null",
+    "nan",
+    "infinity",
+    "negative",
+    "negative_zero",
+    "over_64_characters",
+    "other_types",
+)
 _REQUEST_ID_MAX_LENGTH = 128
 _REQUEST_ID_PATTERN_SOURCE = r"[A-Za-z0-9]+-[A-Za-z0-9]+-[A-Za-z0-9]+"
 _REQUEST_ID_PATTERN = re.compile(_REQUEST_ID_PATTERN_SOURCE)
@@ -105,7 +120,11 @@ _RECORD_FIELD_CONTRACT_SOURCE: dict[str, dict[str, object]] = {
 }
 _ENVELOPE_FIELD_CONTRACT_SOURCE: dict[str, dict[str, object]] = {
     "results": {"type": "array", "nullable": False, "required": False},
-    "totalCost": {"type": "string", "nullable": False, "required": False},
+    "totalCost": {
+        "type": _TOTAL_COST_PROVIDER_TYPES,
+        "nullable": False,
+        "required": False,
+    },
     "quantityFreeRemaining": {
         "type": "integer",
         "nullable": False,
@@ -113,6 +132,7 @@ _ENVELOPE_FIELD_CONTRACT_SOURCE: dict[str, dict[str, object]] = {
         "preview_only": True,
     },
     "resultCount": {"type": "integer", "nullable": False, "required": False},
+    "totalResultCount": {"type": "integer", "nullable": False, "required": False},
 }
 _PARTY_FIELD_CONTRACT_SOURCE: dict[str, dict[str, object]] = {
     "kind": {
@@ -186,7 +206,8 @@ _BILLING_EVIDENCE_SOURCE: dict[str, object] = {
     },
     "total_cost": {
         "provider_source": "totalCost",
-        "type": "decimal_string",
+        "type": "decimal",
+        "provider_types": _TOTAL_COST_PROVIDER_TYPES,
         "required_by_parser": True,
     },
     "currency": {
@@ -199,6 +220,7 @@ _BILLING_EVIDENCE_SOURCE: dict[str, object] = {
         "preview_only": True,
     },
     "result_count": {"provider_source": "resultCount"},
+    "total_result_count": {"provider_source": "totalResultCount", "nullable": True},
     "request_id": {
         "type": "string",
         "nullable": True,
@@ -222,11 +244,61 @@ _PARSER_POLICY_SOURCE: dict[str, object] = {
         "minimum": 0,
         "must_match_records": True,
         "provider_maximum": None,
+        "withheld_records": {
+            "purchase_requested": False,
+            "results": "empty",
+            "positive_count": ("result_count", "total_result_count"),
+            "records_withheld": True,
+        },
+    },
+    "total_result_count": {
+        "required": False,
+        "minimum": 0,
+        "not_less_than": "result_count",
+        "provider_maximum": None,
+    },
+    "truncated": {
+        "stored": False,
+        "records_withheld": False,
+        "total_result_count": "greater_than_record_count",
+    },
+    "property_persons_envelope_fields": _PROPERTY_PERSONS_ENVELOPE_KEYS,
+    "property_persons": {
+        "purchase_requested": {
+            "type": "boolean",
+            "nullable": True,
+            "requires_property_persons": True,
+        },
+        "result_count": {
+            "required": False,
+            "minimum": 0,
+            "must_match_people": True,
+        },
+        "total_result_count": {
+            "required": False,
+            "minimum": 0,
+            "not_less_than": "result_count",
+            "must_match_people": True,
+        },
+        "withheld_owners": {
+            "purchase_requested": False,
+            "results": "empty",
+            "positive_count": ("result_count", "total_result_count"),
+            "current_owners": None,
+            "current_owners_withheld": True,
+            "zero_counts": "empty_current_owners",
+            "missing_counts": "fail_closed",
+            "live_probed": False,
+        },
     },
     "quantity_free_remaining": {"minimum": 0},
     "total_cost": {
+        "accepted_types": _TOTAL_COST_PROVIDER_TYPES,
         "fullmatch_pattern": _TOTAL_COST_PATTERN_SOURCE,
         "max_length": _TOTAL_COST_MAX_LENGTH,
+        "integer": "exact_int_minimum_0_maximum_64_digits",
+        "number": "finite_float_minimum_0_decimal_repr_plain_form_matches_pattern",
+        "rejected": _TOTAL_COST_REJECTED,
     },
     "empty_display_string": None,
     "whitespace_display_string": "preserve",
@@ -355,7 +427,12 @@ class TransactionParty:
 
 @dataclass(frozen=True, slots=True, repr=False)
 class TransactionBillingEvidence:
-    """Immutable billing evidence for one transaction-history response."""
+    """Immutable billing evidence for one transaction-history response.
+
+    ``total_result_count`` is the provider ``totalResultCount`` when the
+    response supplied it, and ``None`` otherwise. It is never less than
+    ``result_count``.
+    """
 
     purchase_requested: bool | None
     status: TransactionBillingStatus
@@ -364,6 +441,7 @@ class TransactionBillingEvidence:
     quantity_free_remaining: int | None
     result_count: int
     request_id: str | None
+    total_result_count: int | None = None
 
     def __post_init__(self) -> None:
         """Reject mutable or contradictory manually constructed evidence."""
@@ -404,6 +482,15 @@ class TransactionBillingEvidence:
             _sanitized_request_id(self.request_id) != self.request_id
         ):
             raise ValueError("request_id is not a sanitized correlation code")
+        if self.total_result_count is not None and (
+            type(self.total_result_count) is not int
+            or self.total_result_count < 0
+            or self.total_result_count < self.result_count
+        ):
+            raise ValueError(
+                "total_result_count must be None or a nonnegative integer "
+                "not less than result_count"
+            )
 
     def __repr__(self) -> str:
         """Return non-personal billing metadata without the request identifier."""
@@ -414,6 +501,7 @@ class TransactionBillingEvidence:
             f"currency_available={self.currency is not None!r}, "
             f"quantity_free_remaining={self.quantity_free_remaining!r}, "
             f"result_count={self.result_count!r}, "
+            f"total_result_count={self.total_result_count!r}, "
             f"request_id_available={self.request_id is not None!r})"
         )
 
@@ -479,17 +567,34 @@ class TransactionHistory:
     """Immutable transactions, current-owner identities, and billing evidence.
 
     ``current_owners`` is ``None`` when no property-person response was
-    composed, an empty tuple when the provider returned no owners, and an
-    ordered tuple otherwise. These identities are property-level evidence and
-    are deliberately not attached to a particular transaction party.
+    composed or when a property-person preview withheld the owners, an empty
+    tuple when the provider returned no owners, and an ordered tuple
+    otherwise. These identities are property-level evidence and are
+    deliberately not attached to a particular transaction party.
+
+    ``records_withheld`` is ``True`` only for a preview response that reported
+    a positive ``resultCount`` or ``totalResultCount`` but returned no rows.
+    ``records`` is then empty and ``billing`` keeps the provider counts.
+
+    ``current_owners_withheld`` is ``True`` only when a property-person
+    preview (``property_persons_purchase_requested=False``) reported a
+    positive ``resultCount`` or ``totalResultCount`` but returned no people.
+    ``current_owners`` is then ``None``: the owners exist but were not
+    returned. This mirrors the transactions preview rule and has not been
+    probed live.
+
+    The computed :attr:`truncated` property reports a response that returned
+    fewer rows than the provider total. A withheld preview is never truncated.
     """
 
     records: tuple[TransactionHistoryRecord, ...]
     current_owners: tuple[TransactionParty, ...] | None
     billing: TransactionBillingEvidence
+    records_withheld: bool = False
+    current_owners_withheld: bool = False
 
     def __post_init__(self) -> None:
-        """Reject mutable record and identity containers."""
+        """Reject mutable containers and contradictory withheld evidence."""
         if type(self.records) is not tuple or any(
             not isinstance(record, TransactionHistoryRecord) for record in self.records
         ):
@@ -503,16 +608,52 @@ class TransactionHistory:
             raise ValueError("current_owners must be a party tuple or None")
         if not isinstance(self.billing, TransactionBillingEvidence):
             raise ValueError("billing must be TransactionBillingEvidence")
+        if type(self.records_withheld) is not bool:
+            raise ValueError("records_withheld must be a boolean")
+        if self.records_withheld and (
+            self.records
+            or self.billing.status != "preview"
+            or (
+                self.billing.result_count <= 0
+                and (
+                    self.billing.total_result_count is None
+                    or self.billing.total_result_count <= 0
+                )
+            )
+        ):
+            raise ValueError(
+                "records_withheld requires no records, preview status and a "
+                "positive result_count or total_result_count"
+            )
+        if type(self.current_owners_withheld) is not bool:
+            raise ValueError("current_owners_withheld must be a boolean")
+        if self.current_owners_withheld and self.current_owners is not None:
+            raise ValueError("current_owners_withheld requires current_owners None")
 
     def __repr__(self) -> str:
         """Return aggregate metadata without licensed record values."""
         return (
             f"{type(self).__name__}(record_count={len(self.records)}, "
+            f"records_withheld={self.records_withheld!r}, "
+            f"truncated={self.truncated!r}, "
             f"current_owners_available={self.current_owners is not None!r}, "
             f"current_owner_count="
             f"{None if self.current_owners is None else len(self.current_owners)!r}, "
+            f"current_owners_withheld={self.current_owners_withheld!r}, "
             f"billing={self.billing!r})"
         )
+
+    @property
+    def truncated(self) -> bool:
+        """Return whether the provider reported more rows than it returned.
+
+        ``True`` when the rows were not withheld and :attr:`total_result_count`
+        is greater than the number of returned records. A truncated history
+        is partial: the provider can limit a response, for example to its
+        default page size, while ``totalResultCount`` reports every match.
+        The property is computed from the stored values and is not a field.
+        """
+        return not self.records_withheld and self.total_result_count > len(self.records)
 
     @property
     def total_cost(self) -> Decimal:
@@ -531,7 +672,9 @@ class TransactionHistory:
 
     @property
     def total_result_count(self) -> int:
-        """Return the non-paginated result count compatibility view."""
+        """Return the provider total count, or ``result_count`` without one."""
+        if self.billing.total_result_count is not None:
+            return self.billing.total_result_count
         return self.billing.result_count
 
     @property
@@ -562,6 +705,7 @@ def parse_transaction_history(
     property_persons: Mapping[str, object] | None = None,
     radar_id: str | None = None,
     request_id: str | None = None,
+    property_persons_purchase_requested: bool | None = None,
 ) -> TransactionHistory:
     """Parse official transaction and optional property-person envelopes.
 
@@ -569,6 +713,26 @@ def parse_transaction_history(
     When ``property_persons`` is supplied, its ordered identities are exposed
     separately as current-owner evidence after every returned ``RadarID`` is
     checked against ``radar_id``.
+
+    ``resultCount`` must equal the number of returned rows. One exception
+    applies only when ``purchase_requested`` is exactly ``False``: a preview
+    may withhold its rows, so an empty ``results`` list with a positive
+    ``resultCount`` or ``totalResultCount`` gives no records and
+    ``records_withheld=True``. The optional ``totalResultCount`` must be an
+    exact nonnegative integer that is not less than ``resultCount``. When it
+    is greater than the number of returned rows and the rows were not
+    withheld, :attr:`TransactionHistory.truncated` is ``True``: the history
+    is partial.
+
+    The property-person response follows the same count rules. It may carry
+    ``resultCount`` and ``totalResultCount``, and each count that is present
+    must equal the number of returned people, with one exception. When
+    ``property_persons_purchase_requested`` is exactly ``False`` and the
+    response has no people, a positive count means that the preview withheld
+    the owners: ``current_owners`` is ``None`` and
+    ``current_owners_withheld`` is ``True``. Counts that are all ``0`` give no
+    owners, and such a preview without any count fails closed. This mirrors
+    the transactions preview rule and has not been probed live.
 
     Args:
         envelope: Decoded JSON returned by ``properties.transactions`` when
@@ -582,16 +746,27 @@ def parse_transaction_history(
             when ``property_persons`` is supplied.
         request_id: Official correlation identifier when a success response
             source supplies one. Unsafe shapes are discarded.
+        property_persons_purchase_requested: The ``Purchase`` choice of the
+            ``properties.persons`` request, exactly ``True`` or ``False``. Use
+            ``None`` (the default) when it is unknown; the count rules then
+            apply without the preview exception. It may be set only together
+            with ``property_persons``.
 
     Returns:
         Immutable transaction records, optional ordered current-owner
         identities, and typed billing evidence.
 
     Raises:
-        InvalidResponseError: If either envelope violates the bound contract.
+        InvalidResponseError: If either envelope violates the bound contract,
+            or if ``property_persons_purchase_requested`` is not ``None`` or
+            a boolean, or is set without ``property_persons``.
     """
     if purchase_requested is not None and type(purchase_requested) is not bool:
         _raise_invalid("purchase_requested")
+    _check_property_persons_purchase_requested(
+        property_persons,
+        purchase_requested=property_persons_purchase_requested,
+    )
     typed_envelope = _snapshot_string_mapping(
         envelope,
         object_reason="envelope_type",
@@ -615,7 +790,23 @@ def parse_transaction_history(
         typed_envelope["resultCount"],
         field_name="result_count",
     )
-    if result_count != len(records):
+    total_result_count = None
+    if "totalResultCount" in typed_envelope:
+        total_result_count = _parse_nonnegative_integer(
+            typed_envelope["totalResultCount"],
+            field_name="total_result_count",
+        )
+        if result_count > total_result_count:
+            _raise_invalid("total_result_count_mismatch")
+    records_withheld = (
+        purchase_requested is False
+        and not records
+        and (
+            result_count > 0
+            or (total_result_count is not None and total_result_count > 0)
+        )
+    )
+    if result_count != len(records) and not records_withheld:
         _raise_invalid("result_count_mismatch")
 
     quantity_free_remaining = None
@@ -627,11 +818,11 @@ def parse_transaction_history(
     if purchase_requested is True and quantity_free_remaining is not None:
         _raise_invalid("charged_preview_metadata")
 
-    current_owners = None
-    if property_persons is not None:
-        if type(radar_id) is not str or radar_id == "":
-            _raise_invalid("composition_radar_id")
-        current_owners = _parse_property_persons(property_persons, radar_id=radar_id)
+    current_owners, current_owners_withheld = _validate_property_persons_composition(
+        property_persons,
+        radar_id=radar_id,
+        purchase_requested=property_persons_purchase_requested,
+    )
 
     billing_status: TransactionBillingStatus
     if purchase_requested is None:
@@ -652,7 +843,65 @@ def parse_transaction_history(
             quantity_free_remaining=quantity_free_remaining,
             result_count=result_count,
             request_id=_sanitized_request_id(request_id),
+            total_result_count=total_result_count,
         ),
+        records_withheld=records_withheld,
+        current_owners_withheld=current_owners_withheld,
+    )
+
+
+def _check_property_persons_purchase_requested(
+    property_persons: Mapping[str, object] | None,
+    *,
+    purchase_requested: bool | None,
+) -> None:
+    """Require ``None``, or an exact boolean that comes with person data."""
+    if purchase_requested is not None and (
+        type(purchase_requested) is not bool or property_persons is None
+    ):
+        _raise_invalid("property_persons_purchase_requested")
+
+
+def _validate_property_persons_composition(
+    property_persons: Mapping[str, object] | None,
+    *,
+    radar_id: str | None,
+    purchase_requested: bool | None,
+) -> tuple[tuple[TransactionParty, ...] | None, bool]:
+    """Check and parse caller-supplied person data without the transactions.
+
+    This runs every check of the optional property-person composition that
+    does not need the transactions envelope: the persons purchase flag, the
+    composition ``radar_id`` and the complete persons parse. A caller can
+    therefore reject bad person data before it sends a billable transactions
+    request, and :func:`parse_transaction_history` raises the same reasons.
+
+    Args:
+        property_persons: Optional decoded ``properties.persons`` response.
+        radar_id: Exact property identifier of the composition.
+        purchase_requested: The persons request's exact ``Purchase`` choice,
+            or ``None`` when it is unknown.
+
+    Returns:
+        The ordered current owners (``None`` without person data or when a
+        preview withheld them) and whether a preview withheld the owners.
+
+    Raises:
+        InvalidResponseError: If a check fails. The error carries only the
+            bounded reason code.
+    """
+    _check_property_persons_purchase_requested(
+        property_persons,
+        purchase_requested=purchase_requested,
+    )
+    if property_persons is None:
+        return None, False
+    if type(radar_id) is not str or radar_id == "":
+        _raise_invalid("composition_radar_id")
+    return _parse_property_persons(
+        property_persons,
+        radar_id=radar_id,
+        purchase_requested=purchase_requested,
     )
 
 
@@ -742,15 +991,21 @@ def _parse_property_persons(
     envelope: Mapping[str, object],
     *,
     radar_id: str,
-) -> tuple[TransactionParty, ...]:
-    """Parse ordered provider current-owner identities without linking records."""
+    purchase_requested: bool | None,
+) -> tuple[tuple[TransactionParty, ...] | None, bool]:
+    """Parse ordered provider current-owner identities without linking records.
+
+    Returns the owners and whether a persons preview withheld them. Withheld
+    owners give ``None`` rather than an empty tuple, so they are never
+    mistaken for a property without owners.
+    """
     typed_envelope = _snapshot_string_mapping(
         envelope,
         object_reason="property_persons_envelope_type",
         snapshot_reason="property_persons_snapshot",
         key_reason="property_persons_key_type",
     )
-    if set(typed_envelope).difference(_TRANSACTION_ENVELOPE_KEYS):
+    if set(typed_envelope).difference(_PROPERTY_PERSONS_ENVELOPE_KEYS):
         _raise_invalid("property_persons_undocumented_envelope_fields")
     raw_results = typed_envelope.get("results")
     if not isinstance(raw_results, list):
@@ -768,13 +1023,32 @@ def _parse_property_persons(
         _parse_property_person(raw_person, radar_id=radar_id)
         for raw_person in raw_people
     )
+    result_count = None
     if "resultCount" in typed_envelope:
         result_count = _parse_nonnegative_integer(
             typed_envelope["resultCount"],
             field_name="property_persons_result_count",
         )
-        if result_count != len(people):
+    total_result_count = None
+    if "totalResultCount" in typed_envelope:
+        total_result_count = _parse_nonnegative_integer(
+            typed_envelope["totalResultCount"],
+            field_name="property_persons_total_result_count",
+        )
+        if result_count is not None and total_result_count < result_count:
+            _raise_invalid("property_persons_total_result_count_mismatch")
+    owners_withheld = False
+    if purchase_requested is False and not people:
+        if result_count is None and total_result_count is None:
+            _raise_invalid("property_persons_preview_count_missing")
+        owners_withheld = (result_count is not None and result_count > 0) or (
+            total_result_count is not None and total_result_count > 0
+        )
+    else:
+        if result_count is not None and result_count != len(people):
             _raise_invalid("property_persons_result_count_mismatch")
+        if total_result_count is not None and total_result_count != len(people):
+            _raise_invalid("property_persons_total_result_count_mismatch")
     if "totalCost" in typed_envelope:
         _parse_total_cost(typed_envelope["totalCost"])
     if "quantityFreeRemaining" in typed_envelope:
@@ -782,7 +1056,9 @@ def _parse_property_persons(
             typed_envelope["quantityFreeRemaining"],
             field_name="property_persons_quantity_free_remaining",
         )
-    return people
+    if owners_withheld:
+        return None, True
+    return people, False
 
 
 def _parse_property_person(
@@ -865,14 +1141,43 @@ def _parse_nonnegative_integer(value: object, *, field_name: str) -> int:
 
 
 def _parse_total_cost(value: object) -> Decimal:
-    """Parse the documented decimal string without numeric coercion."""
-    if (
-        type(value) is not str
-        or len(value) > _TOTAL_COST_MAX_LENGTH
-        or _TOTAL_COST_PATTERN.fullmatch(value) is None
+    """Parse a bounded nonnegative cost from an exact JSON primitive.
+
+    ``totalCost`` can arrive as a JSON integer (a live preview sends ``0``),
+    a JSON number or a decimal string. An exact ``int`` needs at most 64
+    digits and always converts exactly. A finite ``float`` converts from its
+    shortest ``repr``, and that plain decimal form must match the documented
+    pattern within 64 characters. The ``Decimal`` then equals the JSON number
+    as written when that number has at most 15 significant digits. A longer
+    JSON number with a fraction or an exponent can already be rounded by JSON
+    decoding before the library sees it. A ``str`` must match the pattern
+    within 64 characters. Booleans, ``None``, subclasses, NaN, infinities,
+    negative values, ``-0.0`` and all other types fail closed with the
+    ``total_cost`` reason.
+    """
+    cost: Decimal | None = None
+    if type(value) is str:
+        if (
+            len(value) <= _TOTAL_COST_MAX_LENGTH
+            and _TOTAL_COST_PATTERN.fullmatch(value) is not None
+        ):
+            cost = Decimal(value)
+    elif type(value) is int:
+        if 0 <= value < _TOTAL_COST_INTEGER_LIMIT:
+            cost = Decimal(value)
+    elif (
+        type(value) is float and math.isfinite(value) and math.copysign(1.0, value) > 0
     ):
+        candidate = Decimal(repr(value))
+        plain = format(candidate, "f")
+        if (
+            len(plain) <= _TOTAL_COST_MAX_LENGTH
+            and _TOTAL_COST_PATTERN.fullmatch(plain) is not None
+        ):
+            cost = candidate
+    if cost is None:
         _raise_invalid("total_cost")
-    return Decimal(value)
+    return cost
 
 
 def _sanitized_request_id(value: str | None) -> str | None:

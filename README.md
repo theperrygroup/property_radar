@@ -15,13 +15,22 @@ An unofficial, typed Python client for the
 
 ## Status
 
-Version `0.4.1` retains the historical interfaces introduced in `0.4.0` and
-updates the publisher to support their package metadata. The base catalog covers all
-37 operations in official API `5.2.0.0`; the new historical Buyer-criterion
-property/location interface binds separate official API `5.3.1.0` evidence.
-The existing recent-query contract, fingerprint, and types remain unchanged.
-The historical transaction interface separates preview quotes from paid rows,
-with explicit date, document, and row-count bounds before billing.
+Version `0.4.2` fixes four response and request mismatches that live
+PropertyRadar responses showed in `0.4.1`. `totalCost` is accepted as a JSON
+integer, a finite JSON number or a decimal string. The bare `{"results": []}`
+envelope of a zero-hit preview is accepted. Preview counts follow the provider
+(`resultCount` counts purchased rows, `totalResultCount` counts matches).
+Buyer-transfer previews request only the free `RadarID` field and restrict the
+search to residential property types with the official `PropertyType`
+criterion. Paid buyer-transfer calls keep the `0.4.1` criteria and
+classification, and a record rejected after billing keeps its billing evidence.
+Transaction history reports withheld preview rows and owners and truncated
+responses. The four typed contracts get new fingerprints; see the changelog.
+The base catalog covers all 37 operations in official API `5.2.0.0`; the
+historical Buyer-criterion property/location interface binds separate official
+API `5.3.1.0` evidence. The historical transaction interface separates preview
+quotes from paid rows, with explicit date, document, and row-count bounds
+before billing.
 Releases are built once and published through the configured PyPI Trusted Publisher.
 
 ## Installation
@@ -58,15 +67,34 @@ strings, so the library preserves each whole value and reports party boundaries
 as unknown. Structured current-owner identities can be composed from the
 dedicated property-persons endpoint with
 `PROPERTY_PERSON_IDENTITY_FIELDS`; they remain separate from any unsupported
-person-to-transaction linkage.
+person-to-transaction linkage. Pass the persons call's `purchase` choice as
+`property_persons_purchase_requested`. `records_withheld` and
+`current_owners_withheld` report a preview that withheld its rows or owners,
+and `truncated` reports any other response with fewer rows than its total
+count.
 
 ## Typed Buyer-Transfer Location Evidence
 
 `client.properties.buyer_transfer_match()` builds a fixed
 `POST /v1/properties` query with PropertyRadar's documented Buyer Name
-(Grantee) criterion, an exact RadarID, bounded geography and recent windows,
-a one-result limit, and typed property/location fields. Its scope fingerprint
-binds the exact criteria, field catalog, limit, and offset.
+(Grantee) criterion, an exact RadarID, bounded geography and recent windows, a
+one-result limit, and typed property/location fields. A free preview
+(`purchase=False`) requests only `RadarID`, because PropertyRadar returns no
+record when a preview asks for any paid field, and adds the official
+residential `PropertyType` criterion. A preview match is residential by the
+criterion (`residential_basis="property_type_criterion"`); a returned preview
+property type outside the five residential types fails closed. A paid call
+(`purchase=True`) sends the `0.4.1` criteria without the `PropertyType`
+criterion and classifies the returned property type as `0.4.1` did, so a
+non-residential type gives `is_residential=False` and `Unknown` gives `None`.
+A record rejected after billing raises `BuyerTransferResponseError`, whose
+`billing_evidence` keeps the cost and counts. Its scope fingerprint binds the
+exact paid criteria, the preview's `PropertyType` criterion, both field
+catalogs, limit, and offset, so a preview and the paid request for the same
+criteria share one value. The `PropertyType`
+criterion on `Purchase=0` follows the official reference and has not been
+probed live, so a preview's no-match can also mean a non-residential or
+`Unknown` transfer.
 
 `client.properties.historical_buyer_transfer_match()` is the separate
 historical interface. It accepts `BuyerTransferMatchCriteria` with an inclusive

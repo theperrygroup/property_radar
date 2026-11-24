@@ -1,10 +1,18 @@
-"""Typed historical buyer linkage under the current provider response schema."""
+"""Typed historical buyer linkage under the current provider response schema.
+
+Only a non-billable ``Purchase=0`` preview carries the residential
+PropertyType criterion. That criterion follows the official API reference and
+has not been live-probed on ``Purchase=0``. A preview's ``matched=False`` also
+covers a non-residential or Unknown transfer that the provider dropped under
+the criterion. A paid ``Purchase=1`` request carries no PropertyType
+criterion, and a paid result classifies the property from the returned PType.
+"""
 
 from __future__ import annotations
 
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import cast
 
@@ -13,27 +21,30 @@ from .buyer_transfer import (
     _PROPERTY_TYPES,
     _RELATIONSHIP,
     _REQUIRED_ENVELOPE_FIELDS,
-    _RESIDENTIAL_PROPERTY_TYPES,
     _SHA256_PATTERN,
     BUYER_TRANSFER_HISTORICAL_MATCH_CONTRACT,
     BUYER_TRANSFER_PROPERTY_FIELDS,
     BuyerTransferBillingEvidence,
-    BuyerTransferBillingStatus,
     BuyerTransferLinkageRelationship,
     BuyerTransferMatchCriteria,
     BuyerTransferPropertyField,
     BuyerTransferPropertyType,
-    _parse_match_count,
-    _parse_nonnegative_integer,
+    BuyerTransferResidentialBasis,
+    _bare_preview_billing,
+    _billing_returns_record,
+    _classify_residential,
+    _is_bare_preview_envelope,
+    _parse_billed_record,
+    _parse_match_billing,
     _parse_optional_coordinate,
     _parse_optional_fips,
-    _parse_optional_property_type,
     _parse_optional_provider_text,
     _parse_required_provider_text,
-    _parse_total_cost,
+    _parse_residential_property_type,
     _raise_invalid,
     _snapshot_string_mapping,
     _validate_coordinate,
+    _validate_residential_basis,
     buyer_transfer_scope_fingerprint,
 )
 
@@ -63,6 +74,9 @@ class HistoricalBuyerTransferProperty:
     apn: str | None
     latitude: Decimal | None
     longitude: Decimal | None
+    residential_basis: BuyerTransferResidentialBasis | None = field(
+        default=None, kw_only=True
+    )
 
     def __post_init__(self) -> None:
         """Validate immutable field order and documented primitive shapes."""
@@ -133,13 +147,22 @@ class HistoricalBuyerTransferProperty:
             maximum=Decimal("180"),
             field_name="longitude",
         )
+        _validate_residential_basis(self.residential_basis, self.property_type)
 
     @property
     def is_residential(self) -> bool | None:
-        """Classify the documented broad property type without guessing Unknown."""
-        if self.property_type in (None, "Unknown"):
-            return None
-        return self.property_type in _RESIDENTIAL_PROPERTY_TYPES
+        """Classify residential use from PType or the preview's type criterion.
+
+        A preview record matched under the residential PropertyType criterion
+        without a returned PType is residential. That criterion follows the
+        official API reference and has not been live-probed on ``Purchase=0``,
+        and a preview's ``matched=False`` also covers a non-residential or
+        Unknown transfer that the provider dropped under it. A paid or unknown
+        result classifies the property from the returned PType: the documented
+        broad property type decides, and Unknown or a missing PType stays
+        unknown.
+        """
+        return _classify_residential(self.property_type, self.residential_basis)
 
     def __repr__(self) -> str:
         """Return completeness metadata without property values."""
@@ -147,6 +170,7 @@ class HistoricalBuyerTransferProperty:
             f"{type(self).__name__}(returned_field_count={len(self.returned_fields)}, "
             f"property_type_available={self.property_type is not None!r}, "
             f"residential={self.is_residential!r}, "
+            f"residential_basis={self.residential_basis!r}, "
             f"address_available={self.address is not None!r}, "
             f"city_available={self.city is not None!r}, "
             f"state_available={self.state is not None!r}, "
@@ -194,7 +218,14 @@ class HistoricalBuyerTransferLinkage:
 
 @dataclass(frozen=True, slots=True, repr=False)
 class HistoricalBuyerTransferMatchResult:
-    """One exact historical buyer outcome and its immutable billing evidence."""
+    """One exact historical buyer outcome and its immutable billing evidence.
+
+    A preview's ``matched=False`` also covers a non-residential or Unknown
+    transfer that the provider dropped under the preview's residential
+    PropertyType criterion. That criterion follows the official API reference
+    and has not been live-probed on ``Purchase=0``. A paid result classifies
+    the property from the returned PType.
+    """
 
     contract_fingerprint: str
     scope_fingerprint: str
@@ -220,7 +251,7 @@ class HistoricalBuyerTransferMatchResult:
             raise ValueError("linkage must use the exact scope fingerprint")
         if not isinstance(self.billing, BuyerTransferBillingEvidence):
             raise ValueError("billing must be BuyerTransferBillingEvidence")
-        if (self.linkage is None) != (self.billing.result_count == 0):
+        if (self.linkage is not None) != _billing_returns_record(self.billing):
             raise ValueError("linkage presence must match the provider result count")
 
     @property
@@ -245,6 +276,25 @@ def parse_historical_buyer_transfer_match(
 
     The result retains only documented property and billing fields. The
     linkage does not claim a transaction identifier or structured grantees.
+
+    With ``purchase_requested=False`` the parser also accepts the provider's
+    bare zero-hit preview ``{"results": []}`` and preview counts, where
+    ``resultCount`` counts purchased rows and ``totalResultCount`` counts
+    matches. Charged and unknown parses keep the exact count rule.
+
+    A preview carries the residential PropertyType criterion, which follows
+    the official API reference and has not been live-probed on
+    ``Purchase=0``. A returned preview PType must be residential, and a
+    preview's ``matched=False`` also covers a non-residential or Unknown
+    transfer that the provider dropped under the criterion. A paid or unknown
+    parse classifies the property from the returned PType alone.
+
+    Raises:
+        BuyerTransferResponseError: If the returned record is rejected after
+            the envelope, the counts and ``totalCost`` were validated. Its
+            ``billing_evidence`` carries that cost and those counts.
+        InvalidResponseError: If any earlier part of the response or an
+            argument violates the contract.
     """
     if not isinstance(criteria, BuyerTransferMatchCriteria):
         _raise_invalid("criteria_type")
@@ -258,6 +308,15 @@ def parse_historical_buyer_transfer_match(
         snapshot_reason="envelope_snapshot",
         key_reason="envelope_key_type",
     )
+    if _is_bare_preview_envelope(typed_envelope, purchase_requested=purchase_requested):
+        return HistoricalBuyerTransferMatchResult(
+            contract_fingerprint=cast(
+                str, BUYER_TRANSFER_HISTORICAL_MATCH_CONTRACT["contract_fingerprint"]
+            ),
+            scope_fingerprint=buyer_transfer_scope_fingerprint(criteria),
+            linkage=None,
+            billing=_bare_preview_billing(),
+        )
     envelope_keys = set(typed_envelope)
     if not set(_REQUIRED_ENVELOPE_FIELDS).issubset(envelope_keys):
         _raise_invalid("required_envelope_fields")
@@ -268,72 +327,38 @@ def parse_historical_buyer_transfer_match(
     raw_results = typed_envelope["results"]
     if not isinstance(raw_results, list):
         _raise_invalid("results_type")
-    result_snapshots = tuple(
-        _snapshot_string_mapping(
-            item,
-            object_reason="property_type",
-            snapshot_reason="property_snapshot",
-            key_reason="property_key_type",
-        )
-        for item in tuple(list.copy(raw_results))
+    raw_records = tuple(list.copy(raw_results))
+    billing = _parse_match_billing(
+        typed_envelope,
+        returned_count=len(raw_records),
+        purchase_requested=purchase_requested,
     )
-    if len(result_snapshots) > 1:
-        _raise_invalid("ambiguous_results")
-    result_count = _parse_match_count(
-        typed_envelope["resultCount"], field_name="result_count"
-    )
-    total_result_count = _parse_match_count(
-        typed_envelope["totalResultCount"], field_name="total_result_count"
-    )
-    if result_count != len(result_snapshots):
-        _raise_invalid("result_count_mismatch")
-    if result_count != total_result_count:
-        _raise_invalid("ambiguous_total_result_count")
-
-    quantity_free_remaining = None
-    if "quantityFreeRemaining" in typed_envelope:
-        quantity_free_remaining = _parse_nonnegative_integer(
-            typed_envelope["quantityFreeRemaining"],
-            field_name="quantity_free_remaining",
-        )
-    if purchase_requested is True and quantity_free_remaining is not None:
-        _raise_invalid("charged_preview_metadata")
 
     scope_fingerprint = buyer_transfer_scope_fingerprint(criteria)
     linkage = None
-    if result_snapshots:
-        property_result = _parse_property(
-            result_snapshots[0],
-            expected_radar_id=criteria.radar_id,
-            expected_county_fips=criteria.county_fips,
+    if raw_records:
+        property_result = _parse_billed_record(
+            raw_records[0],
+            lambda record: _parse_property(
+                record,
+                expected_radar_id=criteria.radar_id,
+                expected_county_fips=criteria.county_fips,
+                purchase_requested=purchase_requested,
+            ),
+            billing_evidence=billing,
         )
         linkage = HistoricalBuyerTransferLinkage(
             scope_fingerprint=scope_fingerprint,
             property=property_result,
         )
 
-    billing_status: BuyerTransferBillingStatus
-    if purchase_requested is None:
-        billing_status = "unknown"
-    elif purchase_requested:
-        billing_status = "charged"
-    else:
-        billing_status = "preview"
     return HistoricalBuyerTransferMatchResult(
         contract_fingerprint=cast(
             str, BUYER_TRANSFER_HISTORICAL_MATCH_CONTRACT["contract_fingerprint"]
         ),
         scope_fingerprint=scope_fingerprint,
         linkage=linkage,
-        billing=BuyerTransferBillingEvidence(
-            purchase_requested=purchase_requested,
-            status=billing_status,
-            total_cost=_parse_total_cost(typed_envelope["totalCost"]),
-            currency=None,
-            quantity_free_remaining=quantity_free_remaining,
-            result_count=result_count,
-            total_result_count=total_result_count,
-        ),
+        billing=billing,
     )
 
 
@@ -357,6 +382,7 @@ def _parse_property(
     *,
     expected_radar_id: str,
     expected_county_fips: str,
+    purchase_requested: bool | None,
 ) -> HistoricalBuyerTransferProperty:
     if set(record).difference(BUYER_TRANSFER_PROPERTY_FIELDS):
         _raise_invalid("undocumented_property_fields")
@@ -368,6 +394,9 @@ def _parse_property(
     fips = _parse_optional_fips(record)
     if fips is not None and int(fips) != int(expected_county_fips):
         _raise_invalid("fips_mismatch")
+    property_type, residential_basis = _parse_residential_property_type(
+        record, purchase_requested=purchase_requested
+    )
     return HistoricalBuyerTransferProperty(
         returned_fields=tuple(
             field_name
@@ -375,7 +404,7 @@ def _parse_property(
             if field_name in record
         ),
         radar_id=radar_id,
-        property_type=_parse_optional_property_type(record),
+        property_type=property_type,
         address=_parse_optional_provider_text(record, "Address"),
         city=_parse_optional_provider_text(record, "City"),
         state=_parse_optional_provider_text(record, "State"),
@@ -395,6 +424,7 @@ def _parse_property(
             minimum=Decimal("-180"),
             maximum=Decimal("180"),
         ),
+        residential_basis=residential_basis,
     )
 
 

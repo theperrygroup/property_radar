@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import traceback
 from collections.abc import Iterator, Mapping
 from dataclasses import FrozenInstanceError, replace
@@ -40,6 +41,10 @@ class StringSubclass(str):
 
 
 class IntSubclass(int):
+    pass
+
+
+class FloatSubclass(float):
     pass
 
 
@@ -144,6 +149,92 @@ def typed_row(values: Mapping[str, object]) -> HistoricalTransactionRecord:
     )
 
 
+def live_transactions_preview_envelope() -> dict[str, object]:
+    """Return the exact live Purchase=0 transactions envelope (totalCost int 0)."""
+    return {
+        "results": [],
+        "totalCost": 0,
+        "quantityFreeRemaining": 9866,
+        "resultCount": 2,
+        "totalResultCount": 2,
+    }
+
+
+# Every accepted totalCost class and the exact Decimal it must become.
+ACCEPTED_TOTAL_COSTS = [
+    pytest.param(0, Decimal("0"), id="json-int-zero-live"),
+    pytest.param(12, Decimal("12"), id="json-int"),
+    pytest.param(10**64 - 1, Decimal("9" * 64), id="json-int-64-digits"),
+    pytest.param(0.0, Decimal("0.0"), id="json-float-zero"),
+    pytest.param(0.5, Decimal("0.5"), id="json-float-half"),
+    pytest.param(1.25, Decimal("1.25"), id="json-float"),
+    pytest.param(1.5, Decimal("1.5"), id="json-float-one-and-a-half"),
+    pytest.param(0.1, Decimal("0.1"), id="json-float-repr-not-binary"),
+    pytest.param(
+        0.30000000000000004,
+        Decimal("0.30000000000000004"),
+        id="json-float-17-significant-digits",
+    ),
+    pytest.param(2.675, Decimal("2.675"), id="json-float-repr-not-rounded"),
+    pytest.param(1e-7, Decimal("1E-7"), id="json-float-exponent-form"),
+    pytest.param(1e63, Decimal("1E+63"), id="json-float-64-character-plain-form"),
+    pytest.param(1e-62, Decimal("1E-62"), id="json-float-64-character-fraction"),
+    pytest.param("3.50", Decimal("3.50"), id="decimal-string-scale-kept"),
+    pytest.param("0", Decimal("0"), id="decimal-string-zero"),
+    pytest.param("9" * 64, Decimal("9" * 64), id="decimal-string-64-characters"),
+]
+# Every rejected totalCost class; each fails closed with the total_cost reason.
+REJECTED_TOTAL_COSTS = [
+    pytest.param(True, id="bool-true"),
+    pytest.param(False, id="bool-false"),
+    pytest.param(None, id="null"),
+    pytest.param(float("nan"), id="nan"),
+    pytest.param(float("inf"), id="positive-infinity"),
+    pytest.param(float("-inf"), id="negative-infinity"),
+    pytest.param(-1, id="negative-int"),
+    pytest.param(-0.5, id="negative-float"),
+    pytest.param(-0.0, id="negative-zero-float"),
+    pytest.param(10**64, id="int-65-digits"),
+    pytest.param(10**5000, id="int-beyond-the-str-conversion-limit"),
+    pytest.param("1" * 65, id="string-65-characters"),
+    pytest.param(1e300, id="float-301-character-plain-form"),
+    pytest.param(1e64, id="float-65-character-plain-form"),
+    pytest.param(1e-63, id="float-65-character-fraction"),
+    pytest.param(5e-324, id="float-subnormal-326-character-fraction"),
+    pytest.param([], id="list"),
+    pytest.param([0], id="list-holding-a-valid-cost"),
+    pytest.param({}, id="dict"),
+    pytest.param({"totalCost": 0}, id="dict-holding-a-valid-cost"),
+    pytest.param(Decimal("1.25"), id="decimal-object"),
+    pytest.param(IntSubclass(1), id="int-subclass"),
+    pytest.param(FloatSubclass(0.5), id="float-subclass"),
+    pytest.param(StringSubclass("0.50"), id="string-subclass"),
+]
+# 0.4.2 changes the totalCost rule, so both transaction contract fingerprints move.
+HISTORICAL_TRANSACTION_CONTRACT_FINGERPRINT_0_4_1 = (
+    # pragma: allowlist nextline secret
+    "15a7a18afd30f8085644c5c374c8dffae24096088620fc8f482d179b3fe258aa"
+)
+HISTORICAL_TRANSACTION_CONTRACT_FINGERPRINT_0_4_2 = (
+    # pragma: allowlist nextline secret
+    "33a65caa400236c89f19a8cabd6e36132ee86dc2224b44cbb6af2b0fec71f183"
+)
+TRANSACTION_HISTORY_CONTRACT_FINGERPRINT_0_4_1 = (
+    # pragma: allowlist nextline secret
+    "d750039019a93bbfc0449b6eecdb47ea8f064e18a7dcfcbd01c3ec30c4e057a8"
+)
+# The review fixes (D6, D7) change only the transaction-history parser policy;
+# the historical transaction contract above must stay as it is (D9).
+TRANSACTION_HISTORY_CONTRACT_FINGERPRINT_0_4_2 = (
+    # pragma: allowlist nextline secret
+    "a9bed508d5f9210dc37f5ce3e1d61061cb87fe0a3dd19e4c991266d6fb1fb635"
+)
+TRANSACTION_HISTORY_CONTRACT_FINGERPRINT_0_4_2_BEFORE_REVIEW = (
+    # pragma: allowlist nextline secret
+    "db0dd03413f298367f79749e522bd3e454e295cafcc68e7dd6d077085254e707"
+)
+
+
 def test_contract_has_current_provenance_and_distinct_stable_fingerprint() -> None:
     contract = HISTORICAL_TRANSACTION_CONTRACT
     assert isinstance(contract, MappingProxyType)
@@ -162,12 +253,31 @@ def test_contract_has_current_provenance_and_distinct_stable_fingerprint() -> No
     assert contract["currency"] is None
     assert contract["automatic_retries"] is False
     assert "unspecified" in str(contract["recording_dates"])
+    assert contract["total_cost"] == "nonnegative_decimal_maximum_64_characters"
+    assert contract["total_cost_types"] == ("integer", "number", "string")
+    assert contract["total_cost_pattern"] == r"[0-9]+(?:\.[0-9]+)?"
+    assert contract["total_cost_integer"] == "exact_int_minimum_0_maximum_64_digits"
+    assert contract["total_cost_number"] == (
+        "finite_float_minimum_0_decimal_repr_plain_form_matches_pattern"
+    )
+    assert contract["total_cost_rejected"] == (
+        "boolean",
+        "null",
+        "nan",
+        "infinity",
+        "negative",
+        "negative_zero",
+        "over_64_characters",
+        "other_types",
+    )
     source = dict(contract)
     fingerprint = source.pop("contract_fingerprint")
     encoded = json.dumps(
         source, sort_keys=True, separators=(",", ":"), ensure_ascii=True
     ).encode("ascii")
     assert fingerprint == hashlib.sha256(encoded).hexdigest()
+    assert fingerprint == HISTORICAL_TRANSACTION_CONTRACT_FINGERPRINT_0_4_2
+    assert fingerprint != HISTORICAL_TRANSACTION_CONTRACT_FINGERPRINT_0_4_1
     assert fingerprint != TRANSACTION_HISTORY_CONTRACT["contract_fingerprint"]
     assert fingerprint != BUYER_TRANSFER_MATCH_CONTRACT["contract_fingerprint"]
     with pytest.raises(TypeError):
@@ -390,8 +500,6 @@ def test_decimal_costs_preserve_fine_scale_without_rounding(cost: str) -> None:
     [
         None,
         True,
-        1,
-        1.25,
         Decimal("1.25"),
         "",
         "-1",
@@ -417,6 +525,141 @@ def test_both_parsers_reject_invalid_cost_without_coercion(cost: object) -> None
         parsed_quote(totalCost=cost)
     with pytest.raises(InvalidResponseError, match="total_cost"):
         parsed_result(totalCost=cost)
+
+
+def test_live_transactions_preview_envelope_with_json_int_total_cost_is_a_quote() -> (
+    None
+):
+    envelope = live_transactions_preview_envelope()
+    quote = parse_historical_transaction_quote(envelope, query=query())
+    assert type(quote) is HistoricalTransactionQuote
+    assert type(quote.total_cost) is Decimal
+    assert quote.total_cost == Decimal("0")
+    assert quote.total_cost.as_tuple() == Decimal("0").as_tuple()
+    assert quote.result_count == 2
+    assert quote.total_result_count == 2
+    assert quote.quantity_free_remaining == 9866
+    assert quote.truncated is False
+    assert quote.purchase_requested is False
+    assert quote.billing_status == "preview"
+    assert quote.currency is None
+    assert quote.scope_fingerprint == query().scope_fingerprint
+    assert not hasattr(quote, "records")
+    assert envelope == live_transactions_preview_envelope()
+
+
+def test_live_transactions_preview_envelope_is_never_a_paid_result() -> None:
+    with pytest.raises(
+        HistoricalTransactionResponseError, match=r"\(paid_preview_metadata\)"
+    ) as caught:
+        parse_historical_transaction_result(
+            live_transactions_preview_envelope(), query=query()
+        )
+    evidence = caught.value.billing_evidence
+    assert evidence.purchase_requested is True
+    assert evidence.total_cost == Decimal("0")
+    assert evidence.result_count == 2
+    assert evidence.total_result_count == 2
+
+
+@pytest.mark.parametrize(("cost", "expected"), ACCEPTED_TOTAL_COSTS)
+def test_both_parsers_accept_json_int_float_and_decimal_string_costs_exactly(
+    cost: object, expected: Decimal
+) -> None:
+    for parsed in (parsed_quote(totalCost=cost), parsed_result(totalCost=cost)):
+        assert type(parsed.total_cost) is Decimal
+        assert parsed.total_cost == expected
+        assert parsed.total_cost.as_tuple() == expected.as_tuple()
+
+
+@pytest.mark.parametrize("cost", [0.1, 2.675, 1e-7])
+def test_float_costs_convert_through_repr_not_the_binary_expansion(
+    cost: float,
+) -> None:
+    assert Decimal(repr(cost)) != Decimal(cost)
+    for parsed in (parsed_quote(totalCost=cost), parsed_result(totalCost=cost)):
+        assert parsed.total_cost == Decimal(repr(cost))
+        assert parsed.total_cost != Decimal(cost)
+
+
+@pytest.mark.parametrize(
+    ("wire", "expected"),
+    [
+        pytest.param("0.1", Decimal("0.1"), id="one-tenth"),
+        pytest.param("1.5", Decimal("1.5"), id="one-and-a-half"),
+        pytest.param(
+            "0.30000000000000004",
+            Decimal("0.30000000000000004"),
+            id="17-significant-digits",
+        ),
+        pytest.param(
+            "0.300000000000000044",
+            Decimal("0.30000000000000004"),
+            id="18-significant-digits-rounded-by-json-decoding",
+        ),
+        pytest.param(
+            "123456789012345678901234567890",
+            Decimal("123456789012345678901234567890"),
+            id="long-integer-stays-exact",
+        ),
+    ],
+)
+def test_json_decoded_costs_parse_as_decoded_without_a_new_rejection(
+    wire: str, expected: Decimal
+) -> None:
+    # D9 changes wording only: JSON decoding can round a long fraction before
+    # the parser sees it, and the parsers keep the decoded value as before.
+    decoded = json.loads('{"totalCost": ' + wire + "}")["totalCost"]
+    for parsed in (parsed_quote(totalCost=decoded), parsed_result(totalCost=decoded)):
+        assert type(parsed.total_cost) is Decimal
+        assert parsed.total_cost == expected
+        assert parsed.total_cost.as_tuple() == expected.as_tuple()
+    assert HISTORICAL_TRANSACTION_CONTRACT["contract_fingerprint"] == (
+        HISTORICAL_TRANSACTION_CONTRACT_FINGERPRINT_0_4_2
+    )
+
+
+@pytest.mark.parametrize("cost", REJECTED_TOTAL_COSTS)
+def test_both_parsers_reject_each_cost_class_outside_the_rule_without_evidence(
+    cost: object,
+) -> None:
+    with pytest.raises(
+        HistoricalTransactionResponseError, match=r"\(total_cost\)"
+    ) as preview:
+        parsed_quote(totalCost=cost)
+    with pytest.raises(
+        HistoricalTransactionResponseError, match=r"\(total_cost\)"
+    ) as paid:
+        parsed_result(totalCost=cost)
+    for caught, purchase in ((preview, False), (paid, True)):
+        evidence = caught.value.billing_evidence
+        assert evidence.purchase_requested is purchase
+        assert evidence.total_cost is None
+        assert evidence.result_count == 2
+        assert evidence.total_result_count == 5
+        assert caught.value.__cause__ is None
+        assert caught.value.__context__ is None
+
+
+@pytest.mark.parametrize(("cost", "expected"), ACCEPTED_TOTAL_COSTS)
+def test_failed_selections_keep_each_accepted_cost_class_as_exact_evidence(
+    cost: object, expected: Decimal
+) -> None:
+    with pytest.raises(
+        HistoricalTransactionResponseError, match=r"\(quote_results_not_omitted\)"
+    ) as preview:
+        parsed_quote(totalCost=cost, results=[row()])
+    with pytest.raises(
+        HistoricalTransactionResponseError, match=r"\(paid_selection\)"
+    ) as paid:
+        parsed_result(totalCost=cost, results=[row(), row()])
+    for caught in (preview, paid):
+        evidence = caught.value.billing_evidence
+        assert evidence.total_cost is not None
+        assert evidence.total_cost == expected
+        assert evidence.total_cost.as_tuple() == expected.as_tuple()
+        assert evidence.result_count == 2
+        assert evidence.total_result_count == 5
 
 
 @pytest.mark.parametrize("field", ["resultCount", "totalResultCount"])
@@ -714,6 +957,8 @@ def test_snapshot_failures_and_selection_errors_are_sanitized() -> None:
         {"total_result_count": -1},
         {"result_count": 1},
         {"total_cost": 1.0},
+        {"total_cost": 0},
+        {"total_cost": "0"},
         {"total_cost": Decimal("NaN")},
         {"total_cost": Decimal("Infinity")},
         {"total_cost": Decimal("-1")},
@@ -739,23 +984,41 @@ def test_direct_paid_construction_requires_immutable_complete_typed_records(
         replace(parsed_result(), records=records)  # type: ignore[arg-type]
 
 
-def test_legacy_transaction_and_buyer_contracts_are_unchanged() -> None:
+def test_legacy_contract_moves_to_0_4_2_and_buyer_stays_distinct() -> None:
     assert TRANSACTION_HISTORY_CONTRACT["api_version"] == "5.2.0.0"
-    assert TRANSACTION_HISTORY_CONTRACT["contract_fingerprint"] == (
-        # pragma: allowlist nextline secret
-        "d750039019a93bbfc0449b6eecdb47ea8f064e18a7dcfcbd01c3ec30c4e057a8"
-    )
-    assert BUYER_TRANSFER_MATCH_CONTRACT["contract_fingerprint"] == (
-        # pragma: allowlist nextline secret
-        "299cfaba5ddfc8337a290352433969f1f1363fa1a545080773761c2c99d2c8be"
-    )
+    transaction_fingerprint = TRANSACTION_HISTORY_CONTRACT["contract_fingerprint"]
+    assert transaction_fingerprint == TRANSACTION_HISTORY_CONTRACT_FINGERPRINT_0_4_2
+    assert transaction_fingerprint not in {
+        TRANSACTION_HISTORY_CONTRACT_FINGERPRINT_0_4_1,
+        TRANSACTION_HISTORY_CONTRACT_FINGERPRINT_0_4_2_BEFORE_REVIEW,
+    }
+    # The exact buyer pin lives in the buyer-transfer test files; this file
+    # checks only the shape and that the buyer contract stays distinct.
+    buyer_fingerprint = BUYER_TRANSFER_MATCH_CONTRACT["contract_fingerprint"]
+    assert isinstance(buyer_fingerprint, str)
+    assert re.fullmatch(r"[0-9a-f]{64}", buyer_fingerprint)
+    assert buyer_fingerprint not in {
+        transaction_fingerprint,
+        HISTORICAL_TRANSACTION_CONTRACT["contract_fingerprint"],
+        TRANSACTION_HISTORY_CONTRACT_FINGERPRINT_0_4_1,
+        TRANSACTION_HISTORY_CONTRACT_FINGERPRINT_0_4_2_BEFORE_REVIEW,
+        HISTORICAL_TRANSACTION_CONTRACT_FINGERPRINT_0_4_1,
+    }
     legacy = parse_transaction_history(
         {"results": [{"RecDate": "2020-06-12"}], "resultCount": 1, "totalCost": "0.25"},
         purchase_requested=True,
     )
     assert legacy.records[0].recording_date == "2020-06-12"
     assert legacy.billing.status == "charged"
-    with pytest.raises(InvalidResponseError):
+    assert legacy.billing.total_cost == Decimal("0.25")
+    legacy_int_cost = parse_transaction_history(
+        {"results": [{"RecDate": "2020-06-12"}], "resultCount": 1, "totalCost": 1},
+        purchase_requested=True,
+    )
+    assert type(legacy_int_cost.billing.total_cost) is Decimal
+    assert legacy_int_cost.billing.total_cost.as_tuple() == Decimal("1").as_tuple()
+    # A historical quote omits results, which the legacy parser still requires.
+    with pytest.raises(InvalidResponseError, match=r"\(required_envelope_keys\)"):
         parse_transaction_history(quote_payload(), purchase_requested=False)
 
 
@@ -805,6 +1068,13 @@ def test_absent_paid_rows_preserve_cost_and_both_counts() -> None:
     [
         ({"totalCost": None}, None, 2, 5),
         ({"totalCost": True}, None, 2, 5),
+        ({"totalCost": False}, None, 2, 5),
+        ({"totalCost": -1}, None, 2, 5),
+        ({"totalCost": -0.0}, None, 2, 5),
+        ({"totalCost": float("nan")}, None, 2, 5),
+        ({"totalCost": 10**64}, None, 2, 5),
+        ({"totalCost": 1e300}, None, 2, 5),
+        ({"totalCost": [0]}, None, 2, 5),
         ({"totalCost": "-0.50"}, None, 2, 5),
         ({"totalCost": "1e-7"}, None, 2, 5),
         ({"totalCost": "9" * 65}, None, 2, 5),
@@ -823,6 +1093,19 @@ def test_absent_paid_rows_preserve_cost_and_both_counts() -> None:
         ),
         ({"resultCount": 3, "totalResultCount": 1}, Decimal("0.0000001"), 3, 1),
         ({"resultCount": 0, "totalResultCount": 0}, Decimal("0.0000001"), 0, 0),
+        (
+            {"totalCost": 12, "resultCount": 3, "totalResultCount": 1},
+            Decimal("12"),
+            3,
+            1,
+        ),
+        (
+            {"totalCost": 1.25, "resultCount": True, "totalResultCount": 5},
+            Decimal("1.25"),
+            None,
+            5,
+        ),
+        ({"totalCost": 0, "resultCount": 0, "totalResultCount": 0}, Decimal("0"), 0, 0),
     ],
 )
 def test_paid_error_captures_each_billing_field_without_cross_field_inference(
@@ -941,6 +1224,8 @@ def test_snapshot_exception_context_does_not_retain_private_provider_values() ->
         {"scope_fingerprint": "not-a-digest"},
         {"scope_fingerprint": StringSubclass("a" * 64)},
         {"total_cost": 0.25},
+        {"total_cost": 0},
+        {"total_cost": "0.25"},
         {"total_cost": Decimal("NaN")},
         {"total_cost": Decimal("Infinity")},
         {"total_cost": Decimal("-0.25")},

@@ -22,10 +22,34 @@ requires client-level `allow_charges=True`, is never retried automatically,
 and fails closed if required result-count or cost evidence is unavailable or
 if preview-only free-quantity metadata appears in the charged response. The
 purchase flag must be exactly boolean and is validated before network I/O.
+The method also checks the caller's `property_persons` data and its
+`property_persons_purchase_requested` flag before any request, so invalid
+persons data never sends a transactions request, billable or not.
+
+A transaction-history preview can report a positive `resultCount` or
+`totalResultCount` without rows. The parser then returns no records and
+`records_withheld=True`. A persons preview composed with
+`property_persons_purchase_requested=False` can likewise report owners without
+returning them: `current_owners=None` and `current_owners_withheld=True`. This
+persons rule mirrors the transactions preview and has not been probed live.
+Neither preview authorizes a purchase. A history whose rows were not withheld
+but number fewer than its `totalResultCount` has `truncated=True`; treat it as
+partial evidence, not as the complete history.
 
 `buyer_transfer_match()` uses the same dual opt-in and no-paid-retry rules. It
-adds an exact RadarID criterion and a one-result limit, but a preview remains
-only cost/request evidence and never authorizes a purchase automatically. Its
+adds an exact RadarID criterion and a one-result limit, and only a preview also
+adds the residential `PropertyType` criterion. A preview remains only
+cost/request evidence and never authorizes a purchase automatically. A preview
+requests only the free `RadarID` field. A preview that reports a match without
+returning the record fails closed (`preview_record_withheld`), so a caller
+never claims a purchase on a withheld match. The `PropertyType` criterion on
+`Purchase=0` follows the official reference and has not been probed live, and
+a preview's no-match can also mean a non-residential or `Unknown` transfer that
+the criterion dropped. A paid call sends the `0.4.1` criteria without it and
+classifies the returned `PType`. When a parser rejects the returned record
+after it has validated the cost and counts, it raises
+`BuyerTransferResponseError`, whose `billing_evidence` keeps them: persist that
+evidence for a charged request, mark the outcome unknown, and do not retry. Its
 purchase flag must be exactly boolean or the method fails before network I/O.
 
 The provider does not return the request's `Purchase` choice. Detached raw

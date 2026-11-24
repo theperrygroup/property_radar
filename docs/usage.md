@@ -65,8 +65,28 @@ with PropertyRadarClient() as client:
         filter_by="CurrentOwner",
         purchase=False,
         property_persons=persons,
+        property_persons_purchase_requested=False,
     )
 ```
+
+Pass the `purchase` choice of the `persons()` call as
+`property_persons_purchase_requested`. Like a transactions preview, a persons
+preview can report a positive `resultCount` or `totalResultCount` without
+returning people. With `property_persons_purchase_requested=False` the history
+then has `current_owners=None` and `current_owners_withheld=True`: the owners
+exist but were not returned. Counts that are all `0` give `current_owners=()`,
+and an empty persons preview without any count fails closed with
+`property_persons_preview_count_missing`. This preview rule mirrors the
+transactions preview and has not been probed live. In every other case,
+including `True` and the default `None`, each count that is present must equal
+the number of returned people. The persons response may carry
+`totalResultCount`, which must not be less than its `resultCount`.
+
+`transaction_history()` checks the `property_persons` data completely before it
+sends the transactions request, so invalid persons data never sends a request,
+and never a billable one. The identity fields that `current_owners` carries
+come from a paid persons call; see the [Django integration](#django-integration)
+example.
 
 `TRANSACTION_HISTORY_CONTRACT` binds the official API version, source
 checksum, operation, filters, fields, response shapes, party and composition
@@ -102,6 +122,24 @@ Currency is currently `None`; the API documents no currency. Parsing a
 detached raw envelope without `purchase_requested=` produces `unknown` rather
 than guessing from cost or free quantity.
 
+`history.billing.total_result_count` keeps the provider `totalResultCount` when
+the response supplies it, and is `None` otherwise; `history.total_result_count`
+then falls back to `result_count`. A preview (`purchase=False`) can report a
+positive `resultCount` or `totalResultCount` with an empty `results` list: the
+history then has no records and `records_withheld=True`. A purchased or
+detached response still requires exactly `resultCount` rows. When the rows were
+not withheld and `total_result_count` is greater than the number of returned
+records, `history.truncated` is `True`: the history is partial, for example
+because the provider limited the response to its documented default of 500
+rows. `truncated` is a computed property, not a stored field.
+
+`totalCost` can be a JSON integer, a finite JSON number or a decimal string,
+and the cost is a `Decimal`. A JSON integer and a decimal string convert
+exactly. JSON decoding gives a number with a fraction or an exponent to the
+library as a float: the `Decimal` equals that number as written when it has at
+most 15 significant digits, and a longer number can already be rounded before
+the library sees it.
+
 ### Typed buyer-transfer property match
 
 Use the exact-target convenience when an application already has one previewed
@@ -130,8 +168,39 @@ with PropertyRadarClient() as client:
 `BUYER_TRANSFER_MATCH_CONTRACT` binds the official source, documented Buyer
 criterion semantics, fixed criteria/fields, zero-or-one cardinality, parser,
 billing rules, and provider limitations. The per-request scope fingerprint
-binds the exact criteria, field catalog, limit, and offset without retaining a
-separate buyer-name digest.
+binds the exact paid criteria, the preview's `PropertyType` criterion, both
+field catalogs (`BUYER_TRANSFER_PROPERTY_FIELDS` and
+`BUYER_TRANSFER_PREVIEW_FIELDS`), limit, and offset without retaining a
+separate buyer-name digest. The preview and the paid request for the same
+criteria share one scope fingerprint.
+
+Only a preview (`purchase=False`), recent or historical, adds the official
+residential criterion
+`{"name": "PropertyType", "value": [{"name": "PType", "value": ["SFR", "CND",
+"MFR", "APT", "RES"]}]}` (`BUYER_TRANSFER_RESIDENTIAL_PTYPE_CODES`) just before
+the RadarID criterion, which stays last. This criterion on `Purchase=0` follows
+the official reference and has not been probed live. A preview's
+`matched=False` therefore also covers a non-residential or `Unknown` transfer
+that the provider dropped under the criterion. A paid request
+(`purchase=True`) sends the `0.4.1` criteria list without the criterion, so it
+still returns such a transfer and classifies it from the returned `PType`.
+`build_buyer_transfer_match_criteria(criteria)` returns the paid list, and
+`build_buyer_transfer_match_criteria(criteria, preview=True)` returns the
+preview list; `preview` is keyword-only and must be exactly a boolean.
+
+A preview (`purchase=False`) requests `Fields=RadarID` only
+(`BUYER_TRANSFER_PREVIEW_FIELDS`), because PropertyRadar returns no record when
+a preview asks for any paid field. Preview counts follow the provider:
+`resultCount` counts purchased rows (`0` or the number of returned records) and
+`totalResultCount` counts matches (`0` or `1`). A preview that reports one match
+without the record fails closed with `preview_record_withheld`, and a preview
+with more than one match fails with `total_result_count`. A zero-hit preview can
+arrive as the bare envelope `{"results": []}`; it parses as no match with zero
+counts, zero cost and `billing.provider_metadata_omitted=True`. Paid and
+detached responses keep the strict rule that `resultCount`, the number of
+records and `totalResultCount` are equal. `totalCost` can be a JSON integer, a
+finite JSON number or a decimal string, and parses to a `Decimal` by the rules
+given for transaction history above.
 
 Set `most_recent_change_of_ownership_only=True` only when the search should be
 limited to the most recent ownership-changing transfer. Despite the provider's
@@ -142,6 +211,37 @@ When present, `result.linkage.property` exposes the exact RadarID, broad
 `PType`, address, city, state, ZIP integer, county, FIPS, APN, and `Decimal`
 coordinates. Missing optional fields stay unavailable and provider strings are
 not trimmed or synthesized. Returned FIPS must identify the requested county.
+A preview record carries only the RadarID, so its other fields are `None`.
+
+`is_residential` and `residential_basis` explain the classification, which
+depends on the request mode:
+
+- Preview (`purchase_requested=False`). A record without a returned `PType`
+  (every preview, because a preview requests only `RadarID`) is residential by
+  the criterion: `is_residential=True` and
+  `residential_basis="property_type_criterion"`. A returned `PType` gives
+  `residential_basis="property_type"` and must be one of the five residential
+  display names (Single Family, Condominium, Multi-Family 2-4, Multi-Family 5+,
+  Other Res.); any other documented type, `Unknown` included, fails closed with
+  `property_type_outside_criterion`.
+- Paid or detached (`purchase_requested=True` or `None`). The parse classifies
+  from the returned `PType` as `0.4.1` did and never fails because of the type:
+  `residential_basis="property_type"`, and `is_residential` is `True` for the
+  five residential types, `False` for the other documented types and `None`
+  for `Unknown`. A record without `PType` has `residential_basis=None` and
+  `is_residential=None`.
+
+A directly constructed property keeps `residential_basis=None` and the `0.4.1`
+classification.
+
+Both buyer-transfer parsers validate the envelope, the counts and `totalCost`
+before the returned record. When they reject the record after that point, they
+raise `BuyerTransferResponseError`, a subclass of `InvalidResponseError`. Its
+`billing_evidence` is the validated `BuyerTransferBillingEvidence`, so a
+rejected paid record keeps the cost and counts of the charged request. The
+message holds only the reason code. Persist that evidence and treat the
+purchase outcome as unknown; the error is not permission to retry. A rejection
+before the billing evidence exists stays a plain `InvalidResponseError`.
 
 The linkage relationship is
 `provider_buyer_criterion_property_match`: PropertyRadar returned the property
@@ -201,8 +301,13 @@ relative `recording_window` or a non-`None` `publication_window`.
 
 `BUYER_TRANSFER_HISTORICAL_MATCH_CONTRACT` version 1 binds separate official
 API `5.3.1.0` provenance. Historical scope fingerprints seal the mode, contract
-fingerprint, and exact recording-date range as well as the request criteria,
-fields, limit, and offset. For a detached response envelope, use
+fingerprint, and exact recording-date range as well as the paid request
+criteria, the preview's `PropertyType` criterion, both field catalogs, limit,
+and offset. The historical method follows the same rules as the recent one:
+`Fields=RadarID` only and the `PropertyType` criterion on previews only,
+provider preview counts, the bare zero-hit envelope, the classification by
+request mode with `residential_basis`, and `BuyerTransferResponseError` for a
+record rejected after billing. For a detached response envelope, use
 `parse_historical_buyer_transfer_match`; it reports the historical contract
 fingerprint and returns `HistoricalBuyerTransferMatchResult`.
 
@@ -215,9 +320,16 @@ The historical parser validates known optional envelope metadata and discards
 it; the typed result retains no raw response. Historical calls request at most
 one result, reject counts greater than one, and never paginate.
 
-The existing recent-query method `buyer_transfer_match()`,
-`parse_buyer_transfer_match`, `BUYER_TRANSFER_MATCH_CONTRACT`, its fingerprint,
-and its types remain unchanged under their API `5.2.0.0` contract.
+The recent-query method `buyer_transfer_match()` and
+`parse_buyer_transfer_match` keep their API `5.2.0.0` signatures, and their
+types keep every `0.4.1` attribute. `0.4.2` adds the keyword-only `preview`
+parameter of `build_buyer_transfer_match_criteria()` and the last fields
+`residential_basis` and `provider_metadata_omitted`. New fields take part in
+equality, hashing and `repr`, so a parsed property differs from one built by
+hand without them, and objects built or pickled under `0.4.1` are not
+supported. Both buyer-transfer contracts record the rules above, so
+`BUYER_TRANSFER_MATCH_CONTRACT` and `BUYER_TRANSFER_HISTORICAL_MATCH_CONTRACT`
+have new contract fingerprints; callers that pin a fingerprint must update it.
 
 A recording date is the document's recording date, not the transaction's
 closing date. Historical results retain the same property-level Buyer
@@ -228,7 +340,11 @@ are unchanged; the example explicitly requests `purchase=False`.
 ### Django integration
 
 Keep provider access in a service module and import only public
-`property_radar` symbols:
+`property_radar` symbols. This example purchases the identity fields, so both
+requests are billable: they need `allow_charges=True` on the client and
+`purchase=True` on each call, and the library never retries them. Run it only
+after the preview and the application's own approval, budget and purchase-claim
+checks:
 
 ```python
 from django.conf import settings
@@ -242,19 +358,27 @@ from property_radar import (
 def purchaser_identity_evidence(radar_id: str) -> TransactionHistory:
     with PropertyRadarClient(
         api_key=settings.PROPERTY_RADAR_API_KEY,
+        allow_charges=True,
     ) as client:
         persons = client.properties.persons(
             radar_id,
             fields=PROPERTY_PERSON_IDENTITY_FIELDS,
-            purchase=False,
+            purchase=True,
         )
         return client.properties.transaction_history(
             radar_id,
             filter_by="CurrentOwner",
-            purchase=False,
+            purchase=True,
             property_persons=persons,
+            property_persons_purchase_requested=True,
         )
 ```
+
+With `property_persons_purchase_requested=True`, every persons count that is
+present must equal the number of returned people, and the history's billing
+status is `charged`. If the persons data fails its checks, the method raises
+`InvalidResponseError` before it sends the paid transactions request; the
+persons call was already billed.
 
 The Django application can compare its lead fields with the provider-supplied
 components in `history.current_owners`. It should not parse
