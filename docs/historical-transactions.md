@@ -4,7 +4,8 @@
 reviewed PropertyRadar API **5.3.1.0**. It leaves the existing 0.2/0.3 transaction
 models, parsers, and fields unchanged. In 0.4.2 both transaction contracts
 record new response rules (a JSON-number `totalCost`, and for transaction
-history the preview `totalResultCount` and withheld rows), so
+history the preview `totalResultCount`, withheld rows, the computed
+`truncated` flag and withheld persons-preview owners), so
 `HISTORICAL_TRANSACTION_CONTRACT` and `TRANSACTION_HISTORY_CONTRACT` have new
 fingerprints. The module only validates
 inputs and parses supplied data; it makes no network calls and authorizes no
@@ -41,6 +42,10 @@ request are not supported by this interface.
 
 `limit` is required and must be an exact integer from 1 through 500. This is a
 **local safety cap**: the provider documents a default of 500, not a maximum.
+The typed `transaction_history()` convenience sends no `Limit`, so that
+default applies to it; its `TransactionHistory.truncated` is `True` when a
+response that did not withhold its rows returned fewer than its
+`totalResultCount`.
 `Filter` may be `All` or `CurrentOwner`. Optional document types and groups must
 be immutable, duplicate-free tuples. Document groups use the seven documented
 values; document types use raw uppercase three-letter codes. Filters apply
@@ -95,14 +100,18 @@ The local completeness policy requires
 only for its bounded selection, not for all historical transactions.
 
 Paid responses reject preview-only `quantityFreeRemaining`. Quotes preserve
-that count when supplied and otherwise expose `None`. Parsed costs are exact
+that count when supplied and otherwise expose `None`. Parsed costs are
 nonnegative `Decimal` values. `totalCost` can be a JSON integer of at most 64
 digits, a finite JSON number whose plain decimal form has at most 64
 characters, or an ASCII decimal string of at most 64 characters (`0`, `0.5` and
 `"3.50"` give `Decimal("0")`, `Decimal("0.5")` and `Decimal("3.50")`).
 Booleans, `null`, NaN, infinities, negative values, `-0.0` and all other types
-fail. No fixed cents scale, rounding, string coercion, or currency is invented;
-a JSON number converts exactly from its shortest decimal form.
+fail. No fixed cents scale, rounding, string coercion, or currency is invented.
+A JSON integer and a decimal string convert exactly. A JSON number with a
+fraction or an exponent reaches the library as a float and converts from its
+shortest decimal form: the `Decimal` equals the number as written when it has
+at most 15 significant digits, and a longer number can already be rounded by
+JSON decoding before the library sees it.
 Zero selected rows require zero cost under this per-returned-record contract;
 a nonempty selection may still be free under the account's terms.
 

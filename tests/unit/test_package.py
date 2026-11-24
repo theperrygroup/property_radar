@@ -52,6 +52,7 @@ def test_buyer_transfer_public_exports_are_available() -> None:
         "BuyerTransferPublicationWindow",
         "BuyerTransferRecordingWindow",
         "BuyerTransferResidentialBasis",
+        "BuyerTransferResponseError",
         "build_buyer_transfer_match_criteria",
         "buyer_transfer_scope_fingerprint",
         "parse_buyer_transfer_match",
@@ -59,3 +60,14 @@ def test_buyer_transfer_public_exports_are_available() -> None:
 
     assert expected.issubset(property_radar.__all__)
     assert all(hasattr(property_radar, name) for name in expected)
+
+
+def test_buyer_transfer_response_error_is_exported_as_an_invalid_response() -> None:
+    from property_radar import buyer_transfer, exceptions
+
+    error_type = property_radar.BuyerTransferResponseError
+
+    assert error_type is buyer_transfer.BuyerTransferResponseError
+    assert issubclass(error_type, exceptions.InvalidResponseError)
+    assert issubclass(error_type, property_radar.InvalidResponseError)
+    assert not issubclass(error_type, property_radar.HistoricalTransactionResponseError)

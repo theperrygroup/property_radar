@@ -17,10 +17,13 @@ inclusive, ordered recording-date ranges may span multiple years. Historical
 results use new types and preserve five-digit ZIP strings with leading zeros.
 Version `0.4.2` fixes the live preview and `totalCost` shapes: buyer-transfer
 previews request only `RadarID` and add the residential `PropertyType`
-criterion, and the four typed contracts have new fingerprints. Method
-signatures, existing attributes, and raw resource return types remain
-unchanged. See the [usage guide](usage.md#historical-recording-dates) for
-historical queries.
+criterion, while paid calls keep the `0.4.1` criteria and classification.
+Transaction history reports withheld preview rows and owners and truncated
+responses, and the four typed contracts have new fingerprints. Existing
+parameters, attributes, and raw resource return types remain. New parameters
+are keyword-only with defaults, and new dataclass fields come last with
+defaults; the project changelog lists them. See the
+[usage guide](usage.md#historical-recording-dates) for historical queries.
 
 The separate [historical transaction interface](historical-transactions.md)
 returns preview counts and estimated cost without requiring rows, and retains
