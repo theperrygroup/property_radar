@@ -670,7 +670,7 @@ def test_builder_checks_criteria_first_and_takes_preview_by_keyword_only() -> No
             preview=1,  # type: ignore[arg-type]
         )
     with pytest.raises(TypeError):
-        build_buyer_transfer_match_criteria(criteria(), True)  # type: ignore[misc]
+        build_buyer_transfer_match_criteria(criteria(), True)  # type: ignore[call-arg]
 
 
 def test_builder_inserts_a_fresh_property_type_item_on_each_preview_call() -> None:
@@ -1761,7 +1761,7 @@ def test_buyer_transfer_response_error_takes_billing_evidence_by_keyword() -> No
     assert error.request_id is None
     assert error.retry_after is None
     with pytest.raises(TypeError):
-        BuyerTransferResponseError(message, evidence)  # type: ignore[misc]
+        BuyerTransferResponseError(message, evidence)  # type: ignore[call-arg]
     with pytest.raises(TypeError):
         BuyerTransferResponseError(message)  # type: ignore[call-arg]
 
