@@ -1766,6 +1766,48 @@ def test_historical_live_one_hit_radar_id_only_preview_is_matched() -> None:
     assert "Synthetic Historical Buyer" not in rendered
 
 
+def test_historical_ci_smoke_shapes_keep_their_results() -> None:
+    # The CI and release smoke tests read item [3] of the historical query
+    # and parse these preview shapes.
+    value = historical_criteria()
+    transfer_recording_date = {
+        "name": "TransferRecDate",
+        "value": ["from: 1/2/2023 to: 10/31/2023"],
+    }
+    one_hit = parse_historical_buyer_transfer_match(
+        {
+            "results": [{"RadarID": "P-SYNTHETIC-HISTORY"}],
+            "totalCost": 0,
+            "quantityFreeRemaining": 100,
+            "resultCount": 0,
+            "totalResultCount": 1,
+        },
+        criteria=value,
+        purchase_requested=False,
+    )
+    bare = parse_historical_buyer_transfer_match(
+        {"results": []}, criteria=value, purchase_requested=False
+    )
+
+    assert build_buyer_transfer_match_criteria(value)[3] == transfer_recording_date
+    assert (
+        build_buyer_transfer_match_criteria(value, preview=True)[3]
+        == transfer_recording_date
+    )
+    assert one_hit.matched is True
+    assert one_hit.linkage is not None
+    assert one_hit.linkage.property.is_residential is True
+    assert one_hit.linkage.property.residential_basis == "property_type_criterion"
+    assert one_hit.billing.status == "preview"
+    assert one_hit.billing.total_cost == Decimal("0")
+    assert one_hit.billing.quantity_free_remaining == 100
+    assert one_hit.billing.result_count == 0
+    assert one_hit.billing.total_result_count == 1
+    assert bare.matched is False
+    assert bare.linkage is None
+    assert bare.billing.provider_metadata_omitted is True
+
+
 @pytest.mark.parametrize("purchase_requested", [True, None])
 def test_historical_live_one_hit_preview_counts_fail_paid_and_unknown_parses(
     purchase_requested: bool | None,
@@ -1833,7 +1875,9 @@ def test_historical_live_total_result_count_two_preview_fails_closed(
         (10**64 - 1, Decimal(10**64 - 1)),
         (0.0, Decimal("0.0")),
         (0.1, Decimal("0.1")),
+        (1.5, Decimal("1.5")),
         (2.5, Decimal("2.5")),
+        (0.30000000000000004, Decimal("0.30000000000000004")),
         (1e16, Decimal("1E+16")),
         ("0", Decimal("0")),
         ("0.50", Decimal("0.50")),
@@ -1854,6 +1898,39 @@ def test_historical_live_total_cost_json_int_float_and_decimal_string_are_accept
 
     assert type(result.billing.total_cost) is Decimal
     assert result.billing.total_cost == expected
+
+
+# D9 adds no totalCost rejection. The parser sees the JSON number as decoded:
+# an integer is always exact, and a number with at most 15 significant digits
+# keeps its written value. A longer number with a fraction or an exponent is
+# already a rounded float, so its Decimal follows that float.
+@pytest.mark.parametrize(
+    ("number", "expected"),
+    [
+        ("0.1", Decimal("0.1")),
+        ("1.5", Decimal("1.5")),
+        ("0.30000000000000004", Decimal("0.30000000000000004")),
+        ("123456789012.345", Decimal("123456789012.345")),
+        ("12345678901234567890", Decimal("12345678901234567890")),
+        ("1.23456789012345678", Decimal("1.2345678901234567")),
+        ("1.0000000000000000001", Decimal("1.0")),
+        ("2.5e3", Decimal("2500.0")),
+    ],
+)
+@pytest.mark.parametrize("purchase_requested", [False, True, None])
+def test_historical_total_cost_follows_the_json_number_as_decoded(
+    number: str, expected: Decimal, purchase_requested: bool | None
+) -> None:
+    payload = {
+        **historical_envelope(purchase=purchase_requested is True),
+        "totalCost": json.loads(number),
+    }
+    result = parse_historical_buyer_transfer_match(
+        payload, criteria=historical_criteria(), purchase_requested=purchase_requested
+    )
+
+    assert type(result.billing.total_cost) is Decimal
+    assert result.billing.total_cost.as_tuple() == expected.as_tuple()
 
 
 @pytest.mark.parametrize(

@@ -1084,6 +1084,8 @@ TOTAL_COST_ACCEPTED: list[tuple[object, Decimal]] = [
     (0.1, Decimal("0.1")),
     (0.5, Decimal("0.5")),
     (1.0, Decimal("1.0")),
+    (1.5, Decimal("1.5")),
+    (0.30000000000000004, Decimal("0.30000000000000004")),
     (12.75, Decimal("12.75")),
     (1e16, Decimal("1E+16")),
     (1e63, Decimal("1E+63")),
@@ -1161,6 +1163,70 @@ def test_live_total_cost_json_int_zero_on_the_one_hit_preview() -> None:
     )
 
     assert result.billing.total_cost == Decimal("0")
+
+
+# D9 adds no totalCost rejection. The parser sees the JSON number as decoded:
+# an integer is always exact, and a number with at most 15 significant digits
+# keeps its written value. A longer number with a fraction or an exponent is
+# already a rounded float, so its Decimal follows that float.
+TOTAL_COST_DECODED_JSON_NUMBERS: list[tuple[str, Decimal]] = [
+    ("0.1", Decimal("0.1")),
+    ("1.5", Decimal("1.5")),
+    ("0.30000000000000004", Decimal("0.30000000000000004")),
+    ("123456789012.345", Decimal("123456789012.345")),
+    ("12345678901234567890", Decimal("12345678901234567890")),
+    ("1.23456789012345678", Decimal("1.2345678901234567")),
+    ("1.0000000000000000001", Decimal("1.0")),
+    ("2.5e3", Decimal("2500.0")),
+]
+
+
+@pytest.mark.parametrize(("number", "expected"), TOTAL_COST_DECODED_JSON_NUMBERS)
+@pytest.mark.parametrize("purchase_requested", [False, True, None])
+def test_total_cost_follows_the_json_number_as_decoded(
+    number: str, expected: Decimal, purchase_requested: bool | None
+) -> None:
+    payload = {
+        **envelope(purchase=purchase_requested is True),
+        "totalCost": json.loads(number),
+    }
+    result = parse_buyer_transfer_match(
+        payload, criteria=criteria(), purchase_requested=purchase_requested
+    )
+
+    assert type(result.billing.total_cost) is Decimal
+    assert result.billing.total_cost.as_tuple() == expected.as_tuple()
+
+
+def test_ci_smoke_preview_shapes_keep_their_results() -> None:
+    # The exact preview shapes that the CI and release smoke tests parse.
+    one_hit = parse_buyer_transfer_match(
+        {
+            "results": [{"RadarID": "P-SYNTHETIC"}],
+            "totalCost": 0,
+            "quantityFreeRemaining": 100,
+            "resultCount": 0,
+            "totalResultCount": 1,
+        },
+        criteria=criteria(),
+        purchase_requested=False,
+    )
+    bare = parse_buyer_transfer_match(
+        {"results": []}, criteria=criteria(), purchase_requested=False
+    )
+
+    assert one_hit.matched is True
+    assert one_hit.linkage is not None
+    assert one_hit.linkage.property.is_residential is True
+    assert one_hit.linkage.property.residential_basis == "property_type_criterion"
+    assert one_hit.billing.status == "preview"
+    assert one_hit.billing.total_cost == Decimal("0")
+    assert one_hit.billing.quantity_free_remaining == 100
+    assert one_hit.billing.result_count == 0
+    assert one_hit.billing.total_result_count == 1
+    assert bare.matched is False
+    assert bare.linkage is None
+    assert bare.billing.provider_metadata_omitted is True
 
 
 @pytest.mark.parametrize("total_cost", TOTAL_COST_REJECTED)
@@ -2212,6 +2278,35 @@ def test_paid_resource_convenience_classifies_a_commercial_record() -> None:
     assert property_value.property_type == "Commercial"
     assert property_value.residential_basis == "property_type"
     assert property_value.is_residential is False
+
+
+def test_paid_resource_total_cost_follows_the_transport_json_decoding() -> None:
+    # The transport decodes the body with the standard JSON decoder, so a
+    # fractional totalCost with more than 15 significant digits is already
+    # rounded when the parser sees it. D9 adds no rejection for it.
+    body = json.dumps({**paid_envelope(), "totalCost": "TOTAL-COST"}).replace(
+        '"TOTAL-COST"', "1.23456789012345678"
+    )
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=body.encode("ascii"),
+            headers={"Content-Type": "application/json"},
+        )
+
+    client, http_client = make_client(handler, allow_charges=True)
+    try:
+        result = client.properties.buyer_transfer_match(
+            criteria=criteria(), purchase=True
+        )
+    finally:
+        http_client.close()
+
+    assert result.billing.status == "charged"
+    total_cost = result.billing.total_cost
+    assert total_cost.as_tuple() == Decimal("1.2345678901234567").as_tuple()
+    assert total_cost != Decimal("1.23456789012345678")
 
 
 def test_paid_resource_record_rejection_propagates_with_evidence_once() -> None:
