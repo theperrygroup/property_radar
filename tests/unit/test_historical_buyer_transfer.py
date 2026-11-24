@@ -71,19 +71,19 @@ RECENT_MOST_RECENT_SCOPE_FINGERPRINT_PAID_PROPERTY_TYPE = (
 # The current values: one scope fingerprint covers the preview and paid parse.
 HISTORICAL_CONTRACT_FINGERPRINT = (
     # pragma: allowlist nextline secret
-    "PENDING_SYNC_HISTORICAL_CONTRACT"
+    "61ab6cc9e609ad3082124e1bc520c9578760a75ddff0ba989c714c72dcbfc906"
 )
 RECENT_CONTRACT_FINGERPRINT = (
     # pragma: allowlist nextline secret
-    "PENDING_SYNC_RECENT_CONTRACT"
+    "580b955265f3f7928ea1bddba03e7244ceaff8f27fd6844343e05d6ae81bc01c"
 )
 HISTORICAL_SCOPE_FINGERPRINT = (
     # pragma: allowlist nextline secret
-    "PENDING_SYNC_HISTORICAL_SCOPE"
+    "2825e8747b930e40b374194bf7d475031ca181d04e2cc928f7c4d9c40c9f9000"
 )
 RECENT_MOST_RECENT_SCOPE_FINGERPRINT = (
     # pragma: allowlist nextline secret
-    "PENDING_SYNC_RECENT_MOST_RECENT_SCOPE"
+    "6ebdcd5a7e03b1afefbbfcac1f180f56b1f5eb5c9f05cf9b41a31f84df29e8de"
 )
 PROPERTY_TYPE_CRITERION: Criterion = {
     "name": "PropertyType",

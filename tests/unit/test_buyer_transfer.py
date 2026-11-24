@@ -49,11 +49,11 @@ RECENT_CONTRACT_FINGERPRINT_PAID_PROPERTY_TYPE = (
 )
 RECENT_CONTRACT_FINGERPRINT = (
     # pragma: allowlist nextline secret
-    "PENDING_SYNC_RECENT_CONTRACT"
+    "580b955265f3f7928ea1bddba03e7244ceaff8f27fd6844343e05d6ae81bc01c"
 )
 RECENT_SCOPE_FINGERPRINT = (
     # pragma: allowlist nextline secret
-    "PENDING_SYNC_RECENT_SCOPE"
+    "c40b4047f89fbaf84b9fe61b294289bcbd29bdc83f7dc08da2eb3459f7149b43"
 )
 PROPERTY_TYPE_CRITERION: Criterion = {
     "name": "PropertyType",
