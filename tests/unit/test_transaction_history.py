@@ -9,7 +9,7 @@ from dataclasses import FrozenInstanceError, fields, replace
 from decimal import Decimal
 from enum import IntEnum
 from types import MappingProxyType
-from typing import Any, cast, get_type_hints
+from typing import Any, cast, get_args, get_type_hints
 
 import httpx
 import pytest
@@ -445,6 +445,53 @@ def preview_billing(**changes: object) -> TransactionBillingEvidence:
     }
     values.update(changes)
     return TransactionBillingEvidence(**values)  # type: ignore[arg-type]
+
+
+def invalid_history(reason: str) -> str:
+    """Return the anchored message pattern of one invalid-history reason."""
+    return rf"^PropertyRadar returned invalid transaction history \({reason}\)\.$"
+
+
+def owner_row(**changes: object) -> dict[str, object]:
+    """Return one synthetic property-person row for P-SYNTHETIC."""
+    row: dict[str, object] = {
+        "RadarID": "P-SYNTHETIC",
+        "PersonType": "Person",
+        "FirstName": "SYN",
+    }
+    row.update(changes)
+    return row
+
+
+def withheld_persons_preview(**counts: object) -> dict[str, object]:
+    """Return a Purchase=0 persons response with no people and the given counts."""
+    persons: dict[str, object] = {
+        "results": [],
+        "totalCost": 0,
+        "quantityFreeRemaining": 9866,
+    }
+    persons.update(counts)
+    return persons
+
+
+def rows_envelope(
+    row_count: int,
+    *,
+    total_result_count: int | None,
+    purchase_requested: bool | None = True,
+) -> dict[str, object]:
+    """Return a transactions envelope with row_count synthetic rows."""
+    row = cast(list[dict[str, object]], synthetic_envelope()["results"])[0]
+    envelope: dict[str, object] = {
+        "results": [dict(row) for _ in range(row_count)],
+        "totalCost": "1.00",
+        "resultCount": row_count,
+    }
+    if purchase_requested is not True:
+        envelope["quantityFreeRemaining"] = 249
+    if total_result_count is not None:
+        envelope["totalResultCount"] = total_result_count
+    return envelope
 
 
 def test_contract_is_current_deeply_immutable_and_fingerprinted() -> None:
@@ -1024,65 +1071,67 @@ def test_property_person_malformed_fields_fail_closed(
     assert "PRIVATE NAME" not in str(failure.value)
 
 
-@pytest.mark.parametrize(
-    ("persons", "radar_id", "reason"),
-    [
-        (
-            cast(Mapping[str, object], []),
-            "P-SYNTHETIC",
-            "property_persons_envelope_type",
-        ),
-        ({}, "P-SYNTHETIC", "property_persons_results_type"),
-        ({"results": {}}, "P-SYNTHETIC", "property_persons_results_type"),
-        (
-            {"results": ["bad"]},
-            "P-SYNTHETIC",
-            "property_person_type",
-        ),
-        (
-            {"results": [], "unknown": "value"},
-            "P-SYNTHETIC",
-            "property_persons_undocumented_envelope_fields",
-        ),
-        (
-            {"results": [], "resultCount": 1},
-            "P-SYNTHETIC",
-            "property_persons_result_count_mismatch",
-        ),
-        (
-            {"results": [], "resultCount": True},
-            "P-SYNTHETIC",
-            "property_persons_result_count",
-        ),
-        (
-            {"results": [], "totalCost": -1},
-            "P-SYNTHETIC",
-            "total_cost",
-        ),
-        (
-            {"results": [], "totalResultCount": True},
-            "P-SYNTHETIC",
-            "property_persons_total_result_count",
-        ),
-        (
-            {"results": [], "totalResultCount": 1},
-            "P-SYNTHETIC",
-            "property_persons_total_result_count_mismatch",
-        ),
-        (
-            {"results": [], "resultCount": 1, "totalResultCount": 0},
-            "P-SYNTHETIC",
-            "property_persons_total_result_count_mismatch",
-        ),
-        (
-            {"results": [], "quantityFreeRemaining": -1},
-            "P-SYNTHETIC",
-            "property_persons_quantity_free_remaining",
-        ),
-        ({"results": []}, None, "composition_radar_id"),
-        ({"results": []}, "", "composition_radar_id"),
-    ],
-)
+# Each bad persons input with the default persons purchase context (None), and
+# the reason that both the parser and the pre-request check must report.
+PROPERTY_PERSONS_FAILURES: list[tuple[Mapping[str, object], str | None, str]] = [
+    (
+        cast(Mapping[str, object], []),
+        "P-SYNTHETIC",
+        "property_persons_envelope_type",
+    ),
+    ({}, "P-SYNTHETIC", "property_persons_results_type"),
+    ({"results": {}}, "P-SYNTHETIC", "property_persons_results_type"),
+    (
+        {"results": ["bad"]},
+        "P-SYNTHETIC",
+        "property_person_type",
+    ),
+    (
+        {"results": [], "unknown": "value"},
+        "P-SYNTHETIC",
+        "property_persons_undocumented_envelope_fields",
+    ),
+    (
+        {"results": [], "resultCount": 1},
+        "P-SYNTHETIC",
+        "property_persons_result_count_mismatch",
+    ),
+    (
+        {"results": [], "resultCount": True},
+        "P-SYNTHETIC",
+        "property_persons_result_count",
+    ),
+    (
+        {"results": [], "totalCost": -1},
+        "P-SYNTHETIC",
+        "total_cost",
+    ),
+    (
+        {"results": [], "totalResultCount": True},
+        "P-SYNTHETIC",
+        "property_persons_total_result_count",
+    ),
+    (
+        {"results": [], "totalResultCount": 1},
+        "P-SYNTHETIC",
+        "property_persons_total_result_count_mismatch",
+    ),
+    (
+        {"results": [], "resultCount": 1, "totalResultCount": 0},
+        "P-SYNTHETIC",
+        "property_persons_total_result_count_mismatch",
+    ),
+    (
+        {"results": [], "quantityFreeRemaining": -1},
+        "P-SYNTHETIC",
+        "property_persons_quantity_free_remaining",
+    ),
+    ({"results": []}, None, "composition_radar_id"),
+    ({"results": []}, "", "composition_radar_id"),
+]
+
+
+@pytest.mark.parametrize(("persons", "radar_id", "reason"), PROPERTY_PERSONS_FAILURES)
 def test_property_person_composition_envelope_failures(
     persons: Mapping[str, object],
     radar_id: str | None,
@@ -1604,7 +1653,9 @@ def test_live_transactions_preview_envelope_through_transaction_history() -> Non
 
     assert history.records == ()
     assert history.records_withheld is True
+    assert history.truncated is False
     assert history.current_owners is None
+    assert history.current_owners_withheld is False
     assert history.billing_status == "preview"
     assert history.purchase_requested is False
     assert type(history.total_cost) is Decimal
@@ -1767,6 +1818,7 @@ def test_total_result_count_is_documented_optional_and_not_below_result_count(
     assert parsed.billing.total_result_count == total_result_count
     assert parsed.total_result_count == total_result_count
     assert parsed.records_withheld is False
+    assert parsed.truncated is (total_result_count > 1)
 
 
 @pytest.mark.parametrize(
@@ -1860,6 +1912,7 @@ def test_preview_accepts_withheld_rows_without_total_result_count(
 
     assert parsed.records == ()
     assert parsed.records_withheld is True
+    assert parsed.truncated is False
     assert parsed.result_count == result_count
     assert parsed.billing.total_result_count is None
     assert parsed.total_result_count == result_count
@@ -1891,8 +1944,23 @@ def test_empty_results_with_zero_result_count_are_never_withheld(
 
     assert parsed.records == ()
     assert parsed.records_withheld is False
+    assert parsed.truncated is False
+    assert parsed.current_owners_withheld is False
     assert parsed.result_count == 0
     assert parsed.total_result_count == 0
+
+
+def test_ci_smoke_preview_shape_with_a_string_zero_cost_stays_a_preview() -> None:
+    parsed = parse_transaction_history(
+        {"results": [], "totalCost": "0", "resultCount": 0},
+        purchase_requested=False,
+    )
+
+    assert parsed.billing_status == "preview"
+    assert parsed.records == ()
+    assert parsed.records_withheld is False
+    assert parsed.truncated is False
+    assert parsed.total_cost.as_tuple() == Decimal("0").as_tuple()
 
 
 @pytest.mark.parametrize("purchase_requested", [False, True, None])
@@ -1959,8 +2027,7 @@ def test_new_model_fields_are_last_with_defaults_for_0_4_1_constructions() -> No
     assert history.total_result_count == 2
     assert history.truncated is True
     assert repr(history).startswith(
-        "TransactionHistory(record_count=0, records_withheld=False, "
-        "truncated=True, "
+        "TransactionHistory(record_count=0, records_withheld=False, truncated=True, "
     )
     assert repr(positional).endswith(
         "result_count=2, total_result_count=None, request_id_available=False)"
@@ -2015,10 +2082,33 @@ def test_manual_history_accepts_records_withheld_for_an_empty_positive_preview()
     )
 
     assert withheld.records_withheld is True
+    assert withheld.truncated is False
     assert withheld == parse_transaction_history(
         live_transactions_preview_envelope(), purchase_requested=False
     )
     assert replace(withheld, records_withheld=False).records_withheld is False
+    assert replace(withheld, records_withheld=False).truncated is True
+
+    # D6: a preview with resultCount 0 and a positive totalResultCount.
+    total_only = TransactionHistory(
+        records=(),
+        current_owners=None,
+        billing=preview_billing(result_count=0, total_result_count=2),
+        records_withheld=True,
+    )
+    assert total_only.records_withheld is True
+    assert total_only.truncated is False
+    assert total_only.total_result_count == 2
+    assert total_only == parse_transaction_history(
+        {
+            "results": [],
+            "totalCost": 0,
+            "quantityFreeRemaining": 9866,
+            "resultCount": 0,
+            "totalResultCount": 2,
+        },
+        purchase_requested=False,
+    )
 
 
 @pytest.mark.parametrize(
@@ -2090,8 +2180,8 @@ def test_manual_history_rejects_records_withheld_outside_an_empty_positive_previ
 ) -> None:
     with pytest.raises(
         ValueError,
-        match="^records_withheld requires no records, preview status "
-        "and a positive result_count or total_result_count$",
+        match=r"^records_withheld requires no records, preview status "
+        r"and a positive result_count or total_result_count$",
     ):
         TransactionHistory(
             records=records,
@@ -2099,3 +2189,1287 @@ def test_manual_history_rejects_records_withheld_outside_an_empty_positive_previ
             billing=billing,
             records_withheld=True,
         )
+
+
+# D6: a preview that withholds rows through totalResultCount, and truncated.
+
+
+@pytest.mark.parametrize("quantity_free_remaining", [None, 9866])
+@pytest.mark.parametrize("total_result_count", [1, 2, 2_147_483_648])
+def test_preview_with_zero_result_count_and_a_positive_total_withholds_rows(
+    total_result_count: int,
+    quantity_free_remaining: int | None,
+) -> None:
+    envelope: dict[str, object] = {
+        "results": [],
+        "totalCost": 0,
+        "resultCount": 0,
+        "totalResultCount": total_result_count,
+    }
+    if quantity_free_remaining is not None:
+        envelope["quantityFreeRemaining"] = quantity_free_remaining
+
+    parsed = parse_transaction_history(envelope, purchase_requested=False)
+
+    assert parsed.records == ()
+    assert parsed.records_withheld is True
+    assert parsed.truncated is False
+    assert parsed.result_count == 0
+    assert parsed.billing.total_result_count == total_result_count
+    assert parsed.total_result_count == total_result_count
+    assert parsed.billing_status == "preview"
+    assert parsed.current_owners is None
+    assert parsed.current_owners_withheld is False
+
+
+@pytest.mark.parametrize("purchase_requested", [True, None])
+def test_paid_and_unknown_empty_pages_below_the_total_are_truncated_not_withheld(
+    purchase_requested: bool | None,
+) -> None:
+    parsed = parse_transaction_history(
+        {"results": [], "totalCost": 0, "resultCount": 0, "totalResultCount": 2},
+        purchase_requested=purchase_requested,
+    )
+
+    assert parsed.records == ()
+    assert parsed.records_withheld is False
+    assert parsed.truncated is True
+    assert parsed.result_count == 0
+    assert parsed.total_result_count == 2
+
+
+@pytest.mark.parametrize("purchase_requested", [True, None])
+@pytest.mark.parametrize(
+    ("row_count", "total_result_count", "truncated"),
+    [
+        pytest.param(2, 5, True, id="two-of-five"),
+        pytest.param(2, 3, True, id="two-of-three"),
+        pytest.param(2, 2, False, id="two-of-two"),
+        pytest.param(2, None, False, id="two-without-a-total"),
+        pytest.param(0, 0, False, id="zero-of-zero"),
+        pytest.param(500, 731, True, id="provider-default-limit-500-of-731"),
+    ],
+)
+def test_truncated_reports_a_page_with_fewer_rows_than_the_total(
+    row_count: int,
+    total_result_count: int | None,
+    truncated: bool,
+    purchase_requested: bool | None,
+) -> None:
+    parsed = parse_transaction_history(
+        rows_envelope(
+            row_count,
+            total_result_count=total_result_count,
+            purchase_requested=purchase_requested,
+        ),
+        purchase_requested=purchase_requested,
+    )
+
+    assert len(parsed.records) == row_count
+    assert parsed.result_count == row_count
+    assert parsed.records_withheld is False
+    assert parsed.truncated is truncated
+    expected_total = row_count if total_result_count is None else total_result_count
+    assert parsed.total_result_count == expected_total
+
+
+@pytest.mark.parametrize(
+    ("total_result_count", "truncated"),
+    [(None, False), (1, False), (3, True)],
+)
+def test_preview_rows_keep_the_count_rule_and_report_truncation(
+    total_result_count: int | None,
+    truncated: bool,
+) -> None:
+    parsed = parse_transaction_history(
+        rows_envelope(
+            1, total_result_count=total_result_count, purchase_requested=False
+        ),
+        purchase_requested=False,
+    )
+
+    assert len(parsed.records) == 1
+    assert parsed.records_withheld is False
+    assert parsed.truncated is truncated
+
+
+@pytest.mark.parametrize(
+    ("result_count", "total_result_count"), [(0, 2), (2, 2), (2, 3)]
+)
+def test_preview_rows_must_still_match_result_count(
+    result_count: int,
+    total_result_count: int,
+) -> None:
+    envelope = rows_envelope(
+        1, total_result_count=total_result_count, purchase_requested=False
+    )
+    envelope["resultCount"] = result_count
+    with pytest.raises(
+        InvalidResponseError, match=invalid_history("result_count_mismatch")
+    ):
+        parse_transaction_history(envelope, purchase_requested=False)
+
+
+@pytest.mark.parametrize(
+    ("result_count", "total_result_count"),
+    [(2, None), (2, 2), (2, 5), (0, 2), (0, 5)],
+)
+def test_withheld_rows_are_never_reported_as_truncated(
+    result_count: int,
+    total_result_count: int | None,
+) -> None:
+    envelope: dict[str, object] = {
+        "results": [],
+        "totalCost": 0,
+        "quantityFreeRemaining": 9866,
+        "resultCount": result_count,
+    }
+    if total_result_count is not None:
+        envelope["totalResultCount"] = total_result_count
+
+    parsed = parse_transaction_history(envelope, purchase_requested=False)
+
+    assert parsed.records_withheld is True
+    assert parsed.truncated is False
+    expected_total = result_count if total_result_count is None else total_result_count
+    assert parsed.total_result_count == expected_total
+
+
+def test_truncated_is_a_read_only_computed_property_and_not_a_field() -> None:
+    assert "truncated" not in {field.name for field in fields(TransactionHistory)}
+    assert isinstance(inspect.getattr_static(TransactionHistory, "truncated"), property)
+    charged = TransactionBillingEvidence(
+        purchase_requested=True,
+        status="charged",
+        total_cost=Decimal("1.00"),
+        currency=None,
+        quantity_free_remaining=None,
+        result_count=0,
+        request_id=None,
+        total_result_count=3,
+    )
+    history = TransactionHistory(records=(), current_owners=None, billing=charged)
+
+    assert history.truncated is True
+    complete = replace(history, billing=replace(charged, total_result_count=0))
+    assert complete.truncated is False
+    withheld = TransactionHistory(
+        records=(),
+        current_owners=None,
+        billing=preview_billing(total_result_count=5),
+        records_withheld=True,
+    )
+    assert withheld.truncated is False
+    with pytest.raises(AttributeError):
+        history.truncated = False  # type: ignore[misc]
+    changes: dict[str, Any] = {"truncated": False}
+    with pytest.raises(TypeError):
+        replace(history, **changes)
+    with pytest.raises(TypeError):
+        TransactionHistory(records=(), current_owners=None, billing=charged, **changes)
+
+
+# D7: the persons preview and the persons purchase context.
+
+WITHHELD_PERSONS_COUNTS = [
+    pytest.param({"resultCount": 2}, id="result-count-only"),
+    pytest.param({"totalResultCount": 2}, id="total-result-count-only"),
+    pytest.param(
+        {"resultCount": 0, "totalResultCount": 2},
+        id="zero-result-count-and-a-positive-total",
+    ),
+    pytest.param({"resultCount": 2, "totalResultCount": 2}, id="equal-counts"),
+    pytest.param(
+        {"resultCount": 2, "totalResultCount": 5}, id="total-above-result-count"
+    ),
+    pytest.param({"resultCount": 2_147_483_648}, id="result-count-above-int32"),
+]
+ZERO_PERSONS_COUNTS = [
+    pytest.param({"resultCount": 0}, id="zero-result-count"),
+    pytest.param({"totalResultCount": 0}, id="zero-total-result-count"),
+    pytest.param({"resultCount": 0, "totalResultCount": 0}, id="both-zero"),
+]
+INVALID_PERSONS_FLAGS = [
+    pytest.param("false", id="string"),
+    pytest.param(0, id="int-zero"),
+    pytest.param(1, id="int-one"),
+    pytest.param(0.0, id="float"),
+    pytest.param(bool, id="type-object"),
+    pytest.param(IntegerSubclass(0), id="int-subclass"),
+    pytest.param([], id="list"),
+]
+# Bad persons data for a persons preview (property_persons_purchase_requested
+# False) and the reason that the parser and the pre-request check must report.
+PERSONS_PREVIEW_FAILURES: list[tuple[Mapping[str, object], str]] = [
+    ({"results": []}, "property_persons_preview_count_missing"),
+    ({"results": [], "totalCost": 0}, "property_persons_preview_count_missing"),
+    ({"results": [], "totalResultCount": True}, "property_persons_total_result_count"),
+    ({"results": [], "totalResultCount": -1}, "property_persons_total_result_count"),
+    (
+        {"results": [], "resultCount": 2, "totalResultCount": 1},
+        "property_persons_total_result_count_mismatch",
+    ),
+    (
+        {"results": [owner_row()], "resultCount": 2},
+        "property_persons_result_count_mismatch",
+    ),
+    (
+        {"results": [owner_row()], "totalResultCount": 2},
+        "property_persons_total_result_count_mismatch",
+    ),
+    ({"results": [], "resultCount": 2, "totalCost": "bad"}, "total_cost"),
+    (
+        {"results": [], "resultCount": 2, "quantityFreeRemaining": -1},
+        "property_persons_quantity_free_remaining",
+    ),
+    ({"results": [owner_row(RadarID="P-OTHER")]}, "property_person_radar_id_mismatch"),
+]
+
+
+def compose(
+    persons: Mapping[str, object] | None,
+    *,
+    flag: bool | None,
+    envelope: Mapping[str, object] | None = None,
+    purchase_requested: bool | None = False,
+) -> TransactionHistory:
+    """Parse a transactions envelope with persons data and a persons Purchase."""
+    return parse_transaction_history(
+        live_transactions_preview_envelope() if envelope is None else envelope,
+        purchase_requested=purchase_requested,
+        property_persons=persons,
+        radar_id="P-SYNTHETIC",
+        property_persons_purchase_requested=flag,
+    )
+
+
+def assert_same_failure(
+    persons: Mapping[str, object],
+    *,
+    radar_id: str | None,
+    flag: bool | None,
+    reason: str,
+) -> None:
+    """Assert that the parser and the pre-request check fail the same way."""
+    pattern = invalid_history(reason)
+    with pytest.raises(InvalidResponseError, match=pattern) as alone:
+        _validate_property_persons_composition(
+            persons, radar_id=radar_id, purchase_requested=flag
+        )
+    with pytest.raises(InvalidResponseError, match=pattern) as parsed:
+        parse_transaction_history(
+            synthetic_envelope(),
+            property_persons=persons,
+            radar_id=radar_id,
+            property_persons_purchase_requested=flag,
+        )
+    assert str(alone.value) == str(parsed.value)
+    assert alone.value.__cause__ is None
+    assert alone.value.__suppress_context__ is True
+
+
+@pytest.mark.parametrize("counts", WITHHELD_PERSONS_COUNTS)
+def test_persons_preview_with_no_people_and_a_positive_count_withholds_owners(
+    counts: dict[str, object],
+) -> None:
+    persons = withheld_persons_preview(**counts)
+
+    parsed = compose(persons, flag=False)
+
+    assert parsed.current_owners is None
+    assert parsed.current_owners_withheld is True
+    assert parsed.records_withheld is True
+    assert parsed.truncated is False
+    assert _validate_property_persons_composition(
+        persons, radar_id="P-SYNTHETIC", purchase_requested=False
+    ) == (None, True)
+
+
+@pytest.mark.parametrize("counts", ZERO_PERSONS_COUNTS)
+def test_persons_preview_with_zero_counts_has_no_owners_and_withholds_none(
+    counts: dict[str, object],
+) -> None:
+    persons = withheld_persons_preview(**counts)
+
+    parsed = compose(persons, flag=False)
+
+    assert parsed.current_owners == ()
+    assert parsed.current_owners_withheld is False
+    assert _validate_property_persons_composition(
+        persons, radar_id="P-SYNTHETIC", purchase_requested=False
+    ) == ((), False)
+
+
+@pytest.mark.parametrize(
+    "persons",
+    [
+        pytest.param({"results": []}, id="bare-results"),
+        pytest.param({"results": [], "totalCost": 0}, id="cost-only"),
+        pytest.param(withheld_persons_preview(), id="cost-and-credits"),
+    ],
+)
+def test_persons_preview_with_no_people_and_no_count_fails_closed(
+    persons: dict[str, object],
+) -> None:
+    pattern = invalid_history("property_persons_preview_count_missing")
+    with pytest.raises(InvalidResponseError, match=pattern):
+        compose(persons, flag=False)
+    with pytest.raises(InvalidResponseError, match=pattern):
+        _validate_property_persons_composition(
+            persons, radar_id="P-SYNTHETIC", purchase_requested=False
+        )
+
+
+@pytest.mark.parametrize("flag", [False, True, None])
+@pytest.mark.parametrize(
+    "counts",
+    [
+        pytest.param({"resultCount": 1}, id="result-count"),
+        pytest.param({"resultCount": 1, "totalResultCount": 1}, id="both-counts"),
+        pytest.param({"totalResultCount": 1}, id="total-only"),
+        pytest.param({}, id="no-count"),
+    ],
+)
+def test_persons_with_people_accept_counts_equal_to_the_people(
+    counts: dict[str, object],
+    flag: bool | None,
+) -> None:
+    persons: dict[str, object] = {
+        "results": [owner_row()],
+        "totalCost": "0.40",
+        **counts,
+    }
+
+    parsed = compose(persons, flag=flag)
+
+    owners = cast(tuple[TransactionParty, ...], parsed.current_owners)
+    assert [owner.first_name for owner in owners] == ["SYN"]
+    assert parsed.current_owners_withheld is False
+    assert _validate_property_persons_composition(
+        persons, radar_id="P-SYNTHETIC", purchase_requested=flag
+    ) == (owners, False)
+
+
+@pytest.mark.parametrize("flag", [False, True, None])
+@pytest.mark.parametrize(
+    ("counts", "reason"),
+    [
+        pytest.param(
+            {"resultCount": 2},
+            "property_persons_result_count_mismatch",
+            id="result-count-above-the-people",
+        ),
+        pytest.param(
+            {"resultCount": 0},
+            "property_persons_result_count_mismatch",
+            id="result-count-below-the-people",
+        ),
+        pytest.param(
+            {"resultCount": 0, "totalResultCount": 0},
+            "property_persons_result_count_mismatch",
+            id="zero-counts-with-a-person",
+        ),
+        pytest.param(
+            {"resultCount": 2, "totalResultCount": 2},
+            "property_persons_result_count_mismatch",
+            id="both-counts-above-the-people",
+        ),
+        pytest.param(
+            {"resultCount": 1, "totalResultCount": 2},
+            "property_persons_total_result_count_mismatch",
+            id="total-above-the-people",
+        ),
+        pytest.param(
+            {"totalResultCount": 2},
+            "property_persons_total_result_count_mismatch",
+            id="total-only-above-the-people",
+        ),
+        pytest.param(
+            {"totalResultCount": 0},
+            "property_persons_total_result_count_mismatch",
+            id="total-only-below-the-people",
+        ),
+    ],
+)
+def test_persons_with_people_reject_counts_that_differ_from_the_people(
+    counts: dict[str, object],
+    reason: str,
+    flag: bool | None,
+) -> None:
+    persons: dict[str, object] = {"results": [owner_row()], **counts}
+    pattern = invalid_history(reason)
+    with pytest.raises(InvalidResponseError, match=pattern):
+        compose(persons, flag=flag)
+    with pytest.raises(InvalidResponseError, match=pattern):
+        _validate_property_persons_composition(
+            persons, radar_id="P-SYNTHETIC", purchase_requested=flag
+        )
+
+
+@pytest.mark.parametrize("flag", [True, None])
+@pytest.mark.parametrize(
+    ("counts", "reason"),
+    [
+        pytest.param(
+            {"resultCount": 2},
+            "property_persons_result_count_mismatch",
+            id="result-count",
+        ),
+        pytest.param(
+            {"resultCount": 2, "totalResultCount": 2},
+            "property_persons_result_count_mismatch",
+            id="both-counts",
+        ),
+        pytest.param(
+            {"totalResultCount": 2},
+            "property_persons_total_result_count_mismatch",
+            id="total-only",
+        ),
+        pytest.param(
+            {"resultCount": 0, "totalResultCount": 2},
+            "property_persons_total_result_count_mismatch",
+            id="zero-result-count-and-a-positive-total",
+        ),
+    ],
+)
+def test_paid_and_detached_persons_never_withhold_owners(
+    counts: dict[str, object],
+    reason: str,
+    flag: bool | None,
+) -> None:
+    persons: dict[str, object] = {"results": [], "totalCost": 0, **counts}
+    pattern = invalid_history(reason)
+    with pytest.raises(InvalidResponseError, match=pattern):
+        compose(persons, flag=flag)
+    with pytest.raises(InvalidResponseError, match=pattern):
+        _validate_property_persons_composition(
+            persons, radar_id="P-SYNTHETIC", purchase_requested=flag
+        )
+
+
+@pytest.mark.parametrize("flag", [True, None])
+@pytest.mark.parametrize(
+    "counts", [pytest.param({}, id="no-count"), *ZERO_PERSONS_COUNTS]
+)
+def test_paid_and_detached_empty_persons_mean_no_owners(
+    counts: dict[str, object],
+    flag: bool | None,
+) -> None:
+    persons: dict[str, object] = {"results": [], "totalCost": 0, **counts}
+
+    parsed = compose(persons, flag=flag)
+
+    assert parsed.current_owners == ()
+    assert parsed.current_owners_withheld is False
+    assert _validate_property_persons_composition(
+        persons, radar_id="P-SYNTHETIC", purchase_requested=flag
+    ) == ((), False)
+
+
+@pytest.mark.parametrize("flag", [False, True, None])
+@pytest.mark.parametrize("people", [0, 1])
+@pytest.mark.parametrize(
+    "total_result_count",
+    [
+        pytest.param(True, id="bool-true"),
+        pytest.param(False, id="bool-false"),
+        pytest.param(None, id="null"),
+        pytest.param("2", id="string"),
+        pytest.param(2.0, id="float"),
+        pytest.param(-1, id="negative"),
+        pytest.param(IntegerSubclass(2), id="int-subclass"),
+        pytest.param(CountEnum.ONE, id="int-enum"),
+        pytest.param([2], id="list"),
+    ],
+)
+def test_persons_total_result_count_rejects_every_non_exact_nonnegative_int(
+    total_result_count: object,
+    people: int,
+    flag: bool | None,
+) -> None:
+    persons: dict[str, object] = {
+        "results": [owner_row() for _ in range(people)],
+        "totalResultCount": total_result_count,
+    }
+    pattern = invalid_history("property_persons_total_result_count")
+    with pytest.raises(InvalidResponseError, match=pattern):
+        compose(persons, flag=flag)
+    with pytest.raises(InvalidResponseError, match=pattern):
+        _validate_property_persons_composition(
+            persons, radar_id="P-SYNTHETIC", purchase_requested=flag
+        )
+
+
+@pytest.mark.parametrize("flag", [False, True, None])
+@pytest.mark.parametrize(
+    ("result_count", "total_result_count"), [(2, 1), (2, 0), (3, 2)]
+)
+def test_persons_total_result_count_below_result_count_fails_closed(
+    result_count: int,
+    total_result_count: int,
+    flag: bool | None,
+) -> None:
+    persons = withheld_persons_preview(
+        resultCount=result_count, totalResultCount=total_result_count
+    )
+    pattern = invalid_history("property_persons_total_result_count_mismatch")
+    with pytest.raises(InvalidResponseError, match=pattern):
+        compose(persons, flag=flag)
+    with pytest.raises(InvalidResponseError, match=pattern):
+        _validate_property_persons_composition(
+            persons, radar_id="P-SYNTHETIC", purchase_requested=flag
+        )
+
+
+@pytest.mark.parametrize(
+    ("persons", "flag", "reason"),
+    [
+        pytest.param(
+            {"results": "bad", "unknown": 1},
+            False,
+            "property_persons_undocumented_envelope_fields",
+            id="undocumented-fields-before-the-results-type",
+        ),
+        pytest.param(
+            {"results": "bad", "totalResultCount": True},
+            False,
+            "property_persons_results_type",
+            id="results-type-before-the-counts",
+        ),
+        pytest.param(
+            {"results": ["bad"], "totalResultCount": True},
+            False,
+            "property_person_type",
+            id="each-person-before-the-counts",
+        ),
+        pytest.param(
+            {"results": [], "resultCount": True, "totalResultCount": True},
+            False,
+            "property_persons_result_count",
+            id="result-count-before-the-total",
+        ),
+        pytest.param(
+            {"results": [], "totalResultCount": "2"},
+            False,
+            "property_persons_total_result_count",
+            id="total-type-before-the-preview-rule",
+        ),
+        pytest.param(
+            {"results": [], "resultCount": 2, "totalResultCount": 1},
+            False,
+            "property_persons_total_result_count_mismatch",
+            id="below-check-before-the-preview-rule",
+        ),
+        pytest.param(
+            {"results": [], "resultCount": 2, "totalResultCount": 1},
+            None,
+            "property_persons_total_result_count_mismatch",
+            id="below-check-before-the-equality-rule",
+        ),
+        pytest.param(
+            {"results": [], "totalCost": None, "quantityFreeRemaining": -1},
+            False,
+            "property_persons_preview_count_missing",
+            id="count-missing-before-the-cost",
+        ),
+        pytest.param(
+            {"results": [], "resultCount": 1, "totalCost": None},
+            None,
+            "property_persons_result_count_mismatch",
+            id="result-count-mismatch-before-the-cost",
+        ),
+        pytest.param(
+            {
+                "results": [],
+                "resultCount": 0,
+                "totalResultCount": 1,
+                "totalCost": None,
+            },
+            True,
+            "property_persons_total_result_count_mismatch",
+            id="total-mismatch-before-the-cost",
+        ),
+        pytest.param(
+            {"results": [], "resultCount": 2, "totalCost": None},
+            False,
+            "total_cost",
+            id="withheld-owners-still-check-the-cost",
+        ),
+        pytest.param(
+            {"results": [], "totalResultCount": 2, "quantityFreeRemaining": -1},
+            False,
+            "property_persons_quantity_free_remaining",
+            id="withheld-owners-still-check-the-credits",
+        ),
+        pytest.param(
+            {"results": [], "resultCount": 0, "quantityFreeRemaining": True},
+            False,
+            "property_persons_quantity_free_remaining",
+            id="zero-counts-still-check-the-credits",
+        ),
+    ],
+)
+def test_persons_checks_follow_the_documented_order(
+    persons: dict[str, object],
+    flag: bool | None,
+    reason: str,
+) -> None:
+    pattern = invalid_history(reason)
+    with pytest.raises(InvalidResponseError, match=pattern):
+        compose(persons, flag=flag)
+    with pytest.raises(InvalidResponseError, match=pattern):
+        _validate_property_persons_composition(
+            persons, radar_id="P-SYNTHETIC", purchase_requested=flag
+        )
+
+
+@pytest.mark.parametrize("flag", INVALID_PERSONS_FLAGS)
+def test_persons_purchase_requested_must_be_none_or_an_exact_boolean(
+    flag: object,
+) -> None:
+    pattern = invalid_history("property_persons_purchase_requested")
+    persons = synthetic_persons([owner_row()])
+    with pytest.raises(InvalidResponseError, match=pattern):
+        compose(persons, flag=cast(bool, flag))
+    # The parser reports it before it reads the transactions envelope.
+    with pytest.raises(InvalidResponseError, match=pattern):
+        parse_transaction_history(
+            cast(Mapping[str, object], []),
+            property_persons=persons,
+            radar_id="P-SYNTHETIC",
+            property_persons_purchase_requested=cast(bool, flag),
+        )
+    # The pre-request check reports it before the radar_id and the persons data.
+    inputs: tuple[Mapping[str, object] | None, ...] = (
+        persons,
+        {"results": "bad"},
+        None,
+    )
+    for persons_input in inputs:
+        for radar_id in ("P-SYNTHETIC", None):
+            with pytest.raises(InvalidResponseError, match=pattern):
+                _validate_property_persons_composition(
+                    persons_input,
+                    radar_id=radar_id,
+                    purchase_requested=cast(bool, flag),
+                )
+
+
+@pytest.mark.parametrize("flag", [False, True])
+def test_persons_purchase_requested_requires_property_persons(flag: bool) -> None:
+    pattern = invalid_history("property_persons_purchase_requested")
+    for radar_id in (None, "P-SYNTHETIC"):
+        with pytest.raises(InvalidResponseError, match=pattern):
+            parse_transaction_history(
+                live_transactions_preview_envelope(),
+                purchase_requested=False,
+                radar_id=radar_id,
+                property_persons_purchase_requested=flag,
+            )
+        with pytest.raises(InvalidResponseError, match=pattern):
+            _validate_property_persons_composition(
+                None, radar_id=radar_id, purchase_requested=flag
+            )
+    # The parser reports it before it reads the transactions envelope.
+    envelopes: tuple[Mapping[str, object], ...] = (
+        cast(Mapping[str, object], []),
+        {},
+        {"results": "bad", "totalCost": 0, "resultCount": 0},
+    )
+    for envelope in envelopes:
+        with pytest.raises(InvalidResponseError, match=pattern):
+            parse_transaction_history(
+                envelope, property_persons_purchase_requested=flag
+            )
+
+
+def test_main_purchase_context_is_checked_before_the_persons_purchase_context() -> None:
+    with pytest.raises(
+        InvalidResponseError, match=invalid_history("purchase_requested")
+    ):
+        parse_transaction_history(
+            {},
+            purchase_requested=cast(bool, "false"),
+            property_persons_purchase_requested=cast(bool, "false"),
+        )
+
+
+def test_default_persons_purchase_context_keeps_the_0_4_1_rules() -> None:
+    withheld_shape = withheld_persons_preview(resultCount=2)
+    with pytest.raises(
+        InvalidResponseError,
+        match=invalid_history("property_persons_result_count_mismatch"),
+    ):
+        parse_transaction_history(
+            live_transactions_preview_envelope(),
+            purchase_requested=False,
+            property_persons=withheld_shape,
+            radar_id="P-SYNTHETIC",
+        )
+    parsed = parse_transaction_history(
+        live_transactions_preview_envelope(),
+        purchase_requested=False,
+        property_persons={"results": []},
+        radar_id="P-SYNTHETIC",
+    )
+    assert parsed.current_owners == ()
+    assert parsed.current_owners_withheld is False
+    without_persons = parse_transaction_history(
+        live_transactions_preview_envelope(), purchase_requested=False
+    )
+    assert without_persons.current_owners is None
+    assert without_persons.current_owners_withheld is False
+
+
+def test_paid_transactions_can_carry_a_withheld_persons_preview() -> None:
+    parsed = compose(
+        withheld_persons_preview(totalResultCount=3),
+        flag=False,
+        envelope=rows_envelope(2, total_result_count=2),
+        purchase_requested=True,
+    )
+
+    assert len(parsed.records) == 2
+    assert parsed.billing_status == "charged"
+    assert parsed.records_withheld is False
+    assert parsed.truncated is False
+    assert parsed.current_owners is None
+    assert parsed.current_owners_withheld is True
+
+
+# D8: the pre-request persons check that the parser shares.
+
+
+def test_composition_check_without_persons_returns_no_owners() -> None:
+    for radar_id in (None, "", "P-SYNTHETIC"):
+        assert _validate_property_persons_composition(
+            None, radar_id=radar_id, purchase_requested=None
+        ) == (None, False)
+
+
+@pytest.mark.parametrize("flag", [False, True, None])
+@pytest.mark.parametrize(
+    "radar_id",
+    [
+        pytest.param(None, id="none"),
+        pytest.param("", id="empty"),
+        pytest.param(1, id="int"),
+        pytest.param(b"P-SYNTHETIC", id="bytes"),
+        pytest.param(StringSubclass("P-SYNTHETIC"), id="str-subclass"),
+    ],
+)
+def test_composition_check_requires_an_exact_radar_id_before_the_persons_data(
+    radar_id: object,
+    flag: bool | None,
+) -> None:
+    pattern = invalid_history("composition_radar_id")
+    inputs: tuple[Mapping[str, object], ...] = (
+        withheld_persons_preview(resultCount=2),
+        {"results": "bad"},
+    )
+    for persons in inputs:
+        with pytest.raises(InvalidResponseError, match=pattern):
+            _validate_property_persons_composition(
+                persons, radar_id=cast(str, radar_id), purchase_requested=flag
+            )
+        with pytest.raises(InvalidResponseError, match=pattern):
+            parse_transaction_history(
+                live_transactions_preview_envelope(),
+                purchase_requested=False,
+                property_persons=persons,
+                radar_id=cast(str, radar_id),
+                property_persons_purchase_requested=flag,
+            )
+
+
+def test_composition_check_returns_the_owners_in_provider_order() -> None:
+    persons = synthetic_persons(
+        [owner_row(), owner_row(FirstName="SECOND", PersonKey="p-second")]
+    )
+
+    owners, withheld = _validate_property_persons_composition(
+        persons, radar_id="P-SYNTHETIC", purchase_requested=None
+    )
+
+    assert withheld is False
+    assert owners is not None
+    assert [owner.first_name for owner in owners] == ["SYN", "SECOND"]
+    assert owners == (
+        parse_transaction_history(
+            synthetic_envelope(), property_persons=persons, radar_id="P-SYNTHETIC"
+        ).current_owners
+    )
+
+
+@pytest.mark.parametrize(("persons", "radar_id", "reason"), PROPERTY_PERSONS_FAILURES)
+def test_composition_check_alone_raises_the_parser_reason_for_detached_persons(
+    persons: Mapping[str, object],
+    radar_id: str | None,
+    reason: str,
+) -> None:
+    assert_same_failure(persons, radar_id=radar_id, flag=None, reason=reason)
+
+
+@pytest.mark.parametrize(("persons", "reason"), PERSONS_PREVIEW_FAILURES)
+def test_composition_check_alone_raises_the_parser_reason_for_a_persons_preview(
+    persons: Mapping[str, object],
+    reason: str,
+) -> None:
+    assert_same_failure(persons, radar_id="P-SYNTHETIC", flag=False, reason=reason)
+
+
+def test_parser_runs_the_pre_request_check_and_uses_its_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[Mapping[str, object] | None, str | None, bool | None]] = []
+
+    def spy(
+        property_persons: Mapping[str, object] | None,
+        *,
+        radar_id: str | None,
+        purchase_requested: bool | None,
+    ) -> tuple[tuple[TransactionParty, ...] | None, bool]:
+        calls.append((property_persons, radar_id, purchase_requested))
+        return (None, True)
+
+    monkeypatch.setattr(
+        "property_radar.transaction_history._validate_property_persons_composition",
+        spy,
+    )
+    persons = synthetic_persons([owner_row()])
+
+    parsed = compose(persons, flag=True)
+
+    assert calls == [(persons, "P-SYNTHETIC", True)]
+    assert parsed.current_owners is None
+    assert parsed.current_owners_withheld is True
+
+
+def test_review_fix_parameters_are_keyword_only_with_0_4_1_defaults() -> None:
+    parameters = inspect.signature(parse_transaction_history).parameters
+    assert list(parameters) == [
+        "envelope",
+        "purchase_requested",
+        "property_persons",
+        "radar_id",
+        "request_id",
+        "property_persons_purchase_requested",
+    ]
+    flag = parameters["property_persons_purchase_requested"]
+    assert flag.kind is inspect.Parameter.KEYWORD_ONLY
+    assert flag.default is None
+    hints = get_type_hints(parse_transaction_history)
+    assert set(get_args(hints["property_persons_purchase_requested"])) == {
+        bool,
+        type(None),
+    }
+    check_hints = get_type_hints(_validate_property_persons_composition)
+    assert set(get_args(check_hints["purchase_requested"])) == {bool, type(None)}
+    check = inspect.signature(_validate_property_persons_composition).parameters
+    assert list(check) == ["property_persons", "radar_id", "purchase_requested"]
+    assert check["property_persons"].kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+    for name in ("radar_id", "purchase_requested"):
+        assert check[name].kind is inspect.Parameter.KEYWORD_ONLY
+        assert check[name].default is inspect.Parameter.empty
+    with pytest.raises(TypeError):
+        _validate_property_persons_composition(None)  # type: ignore[call-arg]
+
+
+# D6 and D7 model rules: current_owners_withheld and the representations.
+
+
+def test_manual_history_accepts_withheld_owners_without_owner_evidence() -> None:
+    withheld = TransactionHistory(
+        records=(),
+        current_owners=None,
+        billing=preview_billing(total_result_count=2),
+        records_withheld=True,
+        current_owners_withheld=True,
+    )
+
+    assert withheld.current_owners_withheld is True
+    assert withheld == compose(withheld_persons_preview(resultCount=2), flag=False)
+    assert withheld != replace(withheld, current_owners_withheld=False)
+    assert replace(withheld, current_owners_withheld=False).current_owners is None
+
+
+@pytest.mark.parametrize(
+    "current_owners_withheld",
+    [
+        pytest.param(1, id="int-one"),
+        pytest.param(0, id="int-zero"),
+        pytest.param("True", id="string"),
+        pytest.param(None, id="null"),
+    ],
+)
+def test_manual_history_rejects_a_non_boolean_current_owners_withheld(
+    current_owners_withheld: object,
+) -> None:
+    with pytest.raises(
+        ValueError, match=r"^current_owners_withheld must be a boolean$"
+    ):
+        TransactionHistory(
+            records=(),
+            current_owners=None,
+            billing=preview_billing(),
+            records_withheld=True,
+            current_owners_withheld=cast(bool, current_owners_withheld),
+        )
+
+
+@pytest.mark.parametrize(
+    "current_owners",
+    [pytest.param((), id="no-owners"), pytest.param((party(),), id="one-owner")],
+)
+def test_manual_history_rejects_withheld_owners_next_to_owner_evidence(
+    current_owners: tuple[TransactionParty, ...],
+) -> None:
+    with pytest.raises(
+        ValueError, match=r"^current_owners_withheld requires current_owners None$"
+    ):
+        TransactionHistory(
+            records=(),
+            current_owners=current_owners,
+            billing=preview_billing(),
+            records_withheld=True,
+            current_owners_withheld=True,
+        )
+
+
+def test_review_fix_reprs_show_the_new_flags_and_no_provider_values() -> None:
+    withheld = compose(
+        withheld_persons_preview(resultCount=987_654_321, totalResultCount=987_654_322),
+        flag=False,
+    )
+    paid = compose(
+        synthetic_persons(
+            [
+                owner_row(
+                    PersonKey="p-private-id",
+                    FirstName="PRIVATE FIRST",
+                    LastName="PRIVATE LAST",
+                )
+            ]
+        ),
+        flag=True,
+        envelope=rows_envelope(2, total_result_count=731),
+        purchase_requested=True,
+    )
+
+    assert repr(withheld) == (
+        "TransactionHistory(record_count=0, records_withheld=True, "
+        "truncated=False, current_owners_available=False, "
+        "current_owner_count=None, current_owners_withheld=True, "
+        f"billing={withheld.billing!r})"
+    )
+    assert repr(paid) == (
+        "TransactionHistory(record_count=2, records_withheld=False, "
+        "truncated=True, current_owners_available=True, "
+        "current_owner_count=1, current_owners_withheld=False, "
+        f"billing={paid.billing!r})"
+    )
+    forbidden = (
+        "987654321",
+        "987654322",
+        "PRIVATE FIRST",
+        "PRIVATE LAST",
+        "p-private-id",
+        "P-SYNTHETIC",
+        "SYNTHETIC SELLER",
+        "SYNTHETIC BUYER",
+        "SYNTHETIC-001",
+        "d-synthetic-001",
+        "425000",
+    )
+    for representation in (
+        repr(withheld),
+        str(withheld),
+        repr(withheld.billing),
+        repr(paid),
+        str(paid),
+        repr(paid.billing),
+    ):
+        assert all(value not in representation for value in forbidden)
+
+
+@pytest.mark.parametrize(
+    ("persons", "flag", "reason"),
+    [
+        pytest.param(
+            {"results": [], "totalResultCount": "SECRET-COUNT"},
+            False,
+            "property_persons_total_result_count",
+            id="total-type",
+        ),
+        pytest.param(
+            {
+                "results": [owner_row(FirstName="SECRET-NAME")],
+                "resultCount": 1,
+                "totalResultCount": 9_876_543,
+            },
+            None,
+            "property_persons_total_result_count_mismatch",
+            id="total-differs-from-the-people",
+        ),
+        pytest.param(
+            {"results": [], "resultCount": 9_876_543, "totalResultCount": 9_876_542},
+            False,
+            "property_persons_total_result_count_mismatch",
+            id="total-below-the-result-count",
+        ),
+        pytest.param(
+            {"results": [], "totalCost": "SECRET", "quantityFreeRemaining": 9_876_543},
+            False,
+            "property_persons_preview_count_missing",
+            id="count-missing",
+        ),
+        pytest.param(
+            synthetic_persons([owner_row(FirstName="SECRET-NAME")]),
+            "SECRET-FLAG",
+            "property_persons_purchase_requested",
+            id="persons-purchase-context",
+        ),
+    ],
+)
+def test_new_persons_reasons_carry_no_provider_values(
+    persons: dict[str, object],
+    flag: object,
+    reason: str,
+) -> None:
+    with pytest.raises(InvalidResponseError, match=invalid_history(reason)) as failure:
+        compose(persons, flag=cast(bool, flag))
+
+    text = "".join(traceback.format_exception(failure.type, failure.value, failure.tb))
+    for secret in ("SECRET", "9876543", "9876542"):
+        assert secret not in str(failure.value)
+        assert secret not in text
+    assert failure.value.__cause__ is None
+    assert failure.value.__context__ is None
+
+
+# D6 to D8 through client.properties.transaction_history (mocked transport).
+
+
+def test_withheld_persons_preview_reaches_the_parser_through_transaction_history() -> (
+    None
+):
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return json_response(LIVE_TRANSACTIONS_PREVIEW_BODY)
+
+    client, transport = make_client(handler)
+    try:
+        history = client.properties.transaction_history(
+            "P-SYNTHETIC",
+            purchase=False,
+            property_persons=withheld_persons_preview(
+                resultCount=2, totalResultCount=2
+            ),
+            property_persons_purchase_requested=False,
+        )
+    finally:
+        transport.close()
+
+    assert history.records_withheld is True
+    assert history.truncated is False
+    assert history.current_owners is None
+    assert history.current_owners_withheld is True
+    assert len(requests) == 1
+    assert requests[0].url.path == "/v1/properties/P-SYNTHETIC/transactions"
+    assert requests[0].url.params["Purchase"] == "0"
+
+
+@pytest.mark.parametrize("flag", [False, True, None])
+def test_transaction_history_passes_the_persons_purchase_context_to_the_parser(
+    flag: bool | None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[dict[str, Any]] = []
+
+    def spy(envelope: Mapping[str, object], **kwargs: Any) -> TransactionHistory:
+        seen.append(kwargs)
+        return parse_transaction_history(envelope, **kwargs)
+
+    monkeypatch.setattr(
+        "property_radar.resources.properties.parse_transaction_history", spy
+    )
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return json_response(LIVE_TRANSACTIONS_PREVIEW_BODY)
+
+    persons = synthetic_persons([owner_row()])
+    client, transport = make_client(handler)
+    try:
+        history = client.properties.transaction_history(
+            "P-SYNTHETIC",
+            property_persons=persons,
+            property_persons_purchase_requested=flag,
+        )
+    finally:
+        transport.close()
+
+    assert len(seen) == 1
+    assert seen[0]["property_persons_purchase_requested"] is flag
+    assert seen[0]["property_persons"] == persons
+    assert seen[0]["radar_id"] == "P-SYNTHETIC"
+    assert seen[0]["purchase_requested"] is False
+    owners = cast(tuple[TransactionParty, ...], history.current_owners)
+    assert [owner.first_name for owner in owners] == ["SYN"]
+    assert history.current_owners_withheld is False
+    assert len(requests) == 1
+
+
+def test_transaction_history_without_persons_passes_the_default_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[dict[str, Any]] = []
+
+    def spy(envelope: Mapping[str, object], **kwargs: Any) -> TransactionHistory:
+        seen.append(kwargs)
+        return parse_transaction_history(envelope, **kwargs)
+
+    monkeypatch.setattr(
+        "property_radar.resources.properties.parse_transaction_history", spy
+    )
+    client, transport = make_client(
+        lambda request: json_response(LIVE_TRANSACTIONS_PREVIEW_BODY)
+    )
+    try:
+        history = client.properties.transaction_history("P-SYNTHETIC")
+    finally:
+        transport.close()
+
+    assert len(seen) == 1
+    assert seen[0].get("property_persons_purchase_requested") is None
+    assert seen[0].get("property_persons") is None
+    assert history.current_owners is None
+    assert history.current_owners_withheld is False
+
+
+def test_default_persons_context_rejects_a_withheld_shape_before_any_request() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return json_response(LIVE_TRANSACTIONS_PREVIEW_BODY)
+
+    client, transport = make_client(handler)
+    try:
+        with pytest.raises(
+            InvalidResponseError,
+            match=invalid_history("property_persons_result_count_mismatch"),
+        ):
+            client.properties.transaction_history(
+                "P-SYNTHETIC",
+                property_persons=withheld_persons_preview(resultCount=2),
+            )
+    finally:
+        transport.close()
+
+    assert requests == []
+
+
+@pytest.mark.parametrize(
+    ("persons", "flag", "reason"),
+    [
+        pytest.param(
+            {"results": [], "totalResultCount": True},
+            None,
+            "property_persons_total_result_count",
+            id="total-type",
+        ),
+        pytest.param(
+            {"results": [], "resultCount": 2, "totalResultCount": 1},
+            False,
+            "property_persons_total_result_count_mismatch",
+            id="total-below-the-result-count",
+        ),
+        pytest.param(
+            {"results": []},
+            False,
+            "property_persons_preview_count_missing",
+            id="preview-count-missing",
+        ),
+        pytest.param(
+            {"results": [owner_row(RadarID="P-OTHER")], "resultCount": 1},
+            True,
+            "property_person_radar_id_mismatch",
+            id="another-property",
+        ),
+    ],
+)
+def test_invalid_persons_data_never_sends_a_paid_request(
+    persons: dict[str, object],
+    flag: bool | None,
+    reason: str,
+) -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return json_response(json.dumps(rows_envelope(1, total_result_count=None)))
+
+    client, transport = make_client(handler, allow_charges=True)
+    try:
+        with pytest.raises(InvalidResponseError, match=invalid_history(reason)):
+            client.properties.transaction_history(
+                "P-SYNTHETIC",
+                purchase=True,
+                property_persons=persons,
+                property_persons_purchase_requested=flag,
+            )
+    finally:
+        transport.close()
+
+    assert requests == []
+
+
+def test_paid_partial_page_is_truncated_through_transaction_history() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return json_response(json.dumps(rows_envelope(2, total_result_count=5)))
+
+    client, transport = make_client(handler, allow_charges=True)
+    try:
+        history = client.properties.transaction_history("P-SYNTHETIC", purchase=True)
+    finally:
+        transport.close()
+
+    assert len(history.records) == 2
+    assert history.billing_status == "charged"
+    assert history.records_withheld is False
+    assert history.truncated is True
+    assert history.total_result_count == 5
+    assert len(requests) == 1
+    assert requests[0].url.params["Purchase"] == "1"
+
+
+def test_preview_with_only_a_positive_total_withholds_rows_through_the_client() -> None:
+    body = (
+        '{"results":[],"totalCost":0,"quantityFreeRemaining":9866,'
+        '"resultCount":0,"totalResultCount":2}'
+    )
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return json_response(body)
+
+    client, transport = make_client(handler)
+    try:
+        history = client.properties.transaction_history("P-SYNTHETIC")
+    finally:
+        transport.close()
+
+    assert history.records == ()
+    assert history.records_withheld is True
+    assert history.truncated is False
+    assert history.result_count == 0
+    assert history.total_result_count == 2
+    assert len(requests) == 1

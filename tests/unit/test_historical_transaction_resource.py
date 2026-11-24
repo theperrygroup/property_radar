@@ -81,7 +81,25 @@ ACCEPTED_WIRE_TOTAL_COSTS = [
     pytest.param("12", Decimal("12"), id="json-int"),
     pytest.param("0.5", Decimal("0.5"), id="json-float-half"),
     pytest.param("1.25", Decimal("1.25"), id="json-float"),
+    pytest.param("1.5", Decimal("1.5"), id="json-float-one-and-a-half"),
     pytest.param("0.1", Decimal("0.1"), id="json-float-repr-not-binary"),
+    pytest.param(
+        "0.30000000000000004",
+        Decimal("0.30000000000000004"),
+        id="json-float-17-significant-digits",
+    ),
+    # D9: JSON decoding can round a fraction with more than 15 significant
+    # digits to the nearest float before the library sees it; no rejection.
+    pytest.param(
+        "0.300000000000000044",
+        Decimal("0.30000000000000004"),
+        id="json-float-18-significant-digits-rounded-by-json-decoding",
+    ),
+    pytest.param(
+        "123456789012345678901234567890",
+        Decimal("123456789012345678901234567890"),
+        id="json-long-int-stays-exact",
+    ),
     pytest.param("1e-7", Decimal("1E-7"), id="json-float-exponent-form"),
     pytest.param('"3.50"', Decimal("3.50"), id="json-decimal-string"),
 ]
@@ -200,6 +218,13 @@ def test_live_preview_envelope_rejects_each_invalid_wire_total_cost(
         pytest.param("0", Decimal("0"), id="json-int-zero"),
         pytest.param("12", Decimal("12"), id="json-int"),
         pytest.param("1.25", Decimal("1.25"), id="json-float"),
+        pytest.param("1.5", Decimal("1.5"), id="json-float-one-and-a-half"),
+        pytest.param("0.1", Decimal("0.1"), id="json-float-one-tenth"),
+        pytest.param(
+            "0.30000000000000004",
+            Decimal("0.30000000000000004"),
+            id="json-float-17-significant-digits",
+        ),
         pytest.param('"0.75"', Decimal("0.75"), id="json-decimal-string"),
     ],
 )

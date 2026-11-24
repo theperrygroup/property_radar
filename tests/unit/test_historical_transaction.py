@@ -168,7 +168,13 @@ ACCEPTED_TOTAL_COSTS = [
     pytest.param(0.0, Decimal("0.0"), id="json-float-zero"),
     pytest.param(0.5, Decimal("0.5"), id="json-float-half"),
     pytest.param(1.25, Decimal("1.25"), id="json-float"),
+    pytest.param(1.5, Decimal("1.5"), id="json-float-one-and-a-half"),
     pytest.param(0.1, Decimal("0.1"), id="json-float-repr-not-binary"),
+    pytest.param(
+        0.30000000000000004,
+        Decimal("0.30000000000000004"),
+        id="json-float-17-significant-digits",
+    ),
     pytest.param(2.675, Decimal("2.675"), id="json-float-repr-not-rounded"),
     pytest.param(1e-7, Decimal("1E-7"), id="json-float-exponent-form"),
     pytest.param(1e63, Decimal("1E+63"), id="json-float-64-character-plain-form"),
@@ -217,7 +223,13 @@ TRANSACTION_HISTORY_CONTRACT_FINGERPRINT_0_4_1 = (
     # pragma: allowlist nextline secret
     "d750039019a93bbfc0449b6eecdb47ea8f064e18a7dcfcbd01c3ec30c4e057a8"
 )
+# The review fixes (D6, D7) change only the transaction-history parser policy;
+# the historical transaction contract above must stay as it is (D9).
 TRANSACTION_HISTORY_CONTRACT_FINGERPRINT_0_4_2 = (
+    # pragma: allowlist nextline secret
+    "a9bed508d5f9210dc37f5ce3e1d61061cb87fe0a3dd19e4c991266d6fb1fb635"
+)
+TRANSACTION_HISTORY_CONTRACT_FINGERPRINT_0_4_2_BEFORE_REVIEW = (
     # pragma: allowlist nextline secret
     "db0dd03413f298367f79749e522bd3e454e295cafcc68e7dd6d077085254e707"
 )
@@ -568,6 +580,43 @@ def test_float_costs_convert_through_repr_not_the_binary_expansion(
     for parsed in (parsed_quote(totalCost=cost), parsed_result(totalCost=cost)):
         assert parsed.total_cost == Decimal(repr(cost))
         assert parsed.total_cost != Decimal(cost)
+
+
+@pytest.mark.parametrize(
+    ("wire", "expected"),
+    [
+        pytest.param("0.1", Decimal("0.1"), id="one-tenth"),
+        pytest.param("1.5", Decimal("1.5"), id="one-and-a-half"),
+        pytest.param(
+            "0.30000000000000004",
+            Decimal("0.30000000000000004"),
+            id="17-significant-digits",
+        ),
+        pytest.param(
+            "0.300000000000000044",
+            Decimal("0.30000000000000004"),
+            id="18-significant-digits-rounded-by-json-decoding",
+        ),
+        pytest.param(
+            "123456789012345678901234567890",
+            Decimal("123456789012345678901234567890"),
+            id="long-integer-stays-exact",
+        ),
+    ],
+)
+def test_json_decoded_costs_parse_as_decoded_without_a_new_rejection(
+    wire: str, expected: Decimal
+) -> None:
+    # D9 changes wording only: JSON decoding can round a long fraction before
+    # the parser sees it, and the parsers keep the decoded value as before.
+    decoded = json.loads('{"totalCost": ' + wire + "}")["totalCost"]
+    for parsed in (parsed_quote(totalCost=decoded), parsed_result(totalCost=decoded)):
+        assert type(parsed.total_cost) is Decimal
+        assert parsed.total_cost == expected
+        assert parsed.total_cost.as_tuple() == expected.as_tuple()
+    assert HISTORICAL_TRANSACTION_CONTRACT["contract_fingerprint"] == (
+        HISTORICAL_TRANSACTION_CONTRACT_FINGERPRINT_0_4_2
+    )
 
 
 @pytest.mark.parametrize("cost", REJECTED_TOTAL_COSTS)
@@ -939,7 +988,10 @@ def test_legacy_contract_moves_to_0_4_2_and_buyer_stays_distinct() -> None:
     assert TRANSACTION_HISTORY_CONTRACT["api_version"] == "5.2.0.0"
     transaction_fingerprint = TRANSACTION_HISTORY_CONTRACT["contract_fingerprint"]
     assert transaction_fingerprint == TRANSACTION_HISTORY_CONTRACT_FINGERPRINT_0_4_2
-    assert transaction_fingerprint != TRANSACTION_HISTORY_CONTRACT_FINGERPRINT_0_4_1
+    assert transaction_fingerprint not in {
+        TRANSACTION_HISTORY_CONTRACT_FINGERPRINT_0_4_1,
+        TRANSACTION_HISTORY_CONTRACT_FINGERPRINT_0_4_2_BEFORE_REVIEW,
+    }
     # The exact buyer pin lives in the buyer-transfer test files; this file
     # checks only the shape and that the buyer contract stays distinct.
     buyer_fingerprint = BUYER_TRANSFER_MATCH_CONTRACT["contract_fingerprint"]
@@ -949,6 +1001,7 @@ def test_legacy_contract_moves_to_0_4_2_and_buyer_stays_distinct() -> None:
         transaction_fingerprint,
         HISTORICAL_TRANSACTION_CONTRACT["contract_fingerprint"],
         TRANSACTION_HISTORY_CONTRACT_FINGERPRINT_0_4_1,
+        TRANSACTION_HISTORY_CONTRACT_FINGERPRINT_0_4_2_BEFORE_REVIEW,
         HISTORICAL_TRANSACTION_CONTRACT_FINGERPRINT_0_4_1,
     }
     legacy = parse_transaction_history(
