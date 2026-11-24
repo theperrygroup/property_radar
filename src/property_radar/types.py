@@ -30,8 +30,9 @@ class ResponseEnvelope(TypedDict, total=False):
 
     ``totalCost`` arrives as a decimal string, as a JSON integer (a live
     preview sends ``0``) or as a JSON number with a fraction or an exponent,
-    which JSON decoding gives as a ``float``. The typed parsers accept each
-    form and return a ``Decimal``.
+    which JSON decoding gives as a ``float``. The typed parsers check each
+    form, reject negative, non-finite and over-long values, and return a
+    ``Decimal``.
     """
 
     results: list[JSONDict]

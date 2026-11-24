@@ -507,10 +507,13 @@ class PropertiesResource(BaseResource):
                 or ``None`` when it is unknown. With ``False``, an empty
                 persons preview with a positive count gives
                 ``current_owners=None`` and ``current_owners_withheld=True``.
-                Set it only together with ``property_persons``.
+                This mirrors the transactions preview and was not
+                live-probed. Set it only together with ``property_persons``.
 
         Returns:
-            Immutable typed transaction history and billing evidence.
+            Immutable typed transaction history and billing evidence. Its
+            ``records_withheld``, ``truncated`` and ``current_owners_withheld``
+            attributes report a withheld or partial response.
 
         Raises:
             TypeError: If ``purchase`` is not exactly a boolean, or if
@@ -592,7 +595,9 @@ class PropertiesResource(BaseResource):
         A paid call (``purchase=True``) sends the 0.4.1 criteria list, without
         the ``PropertyType`` criterion, and requests the full
         ``BUYER_TRANSFER_PROPERTY_FIELDS`` catalog. It classifies the property
-        from the returned ``PType``.
+        from the returned ``PType``: ``is_residential`` is ``True`` for the
+        five residential types, ``False`` for the other documented types, and
+        ``None`` for ``Unknown`` or a record without ``PType``.
 
         Args:
             criteria: Exact buyer, property, geography, and transfer windows.
@@ -671,7 +676,7 @@ class PropertiesResource(BaseResource):
         paid call (``purchase=True``) sends the 0.4.1 criteria list, without
         the ``PropertyType`` criterion, and requests
         ``BUYER_TRANSFER_PROPERTY_FIELDS``. It classifies the property from
-        the returned ``PType``.
+        the returned ``PType`` as :meth:`buyer_transfer_match` does.
 
         Args:
             criteria: Exact buyer, property, geography, and an exact
