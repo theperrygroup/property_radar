@@ -715,7 +715,11 @@ def _cost_or_none(value: object) -> Decimal | None:
     # One rule for parsers and failure evidence: an exact JSON integer, a
     # finite float or an ASCII decimal string, nonnegative and within 64
     # characters. Booleans, subclasses, NaN, infinities, negatives and -0.0
-    # are rejected; a float converts exactly from its shortest repr.
+    # are rejected. An integer always converts exactly. A float converts
+    # from its shortest repr, so the Decimal equals the JSON number as
+    # written when that number has at most 15 significant digits; a longer
+    # number with a fraction or an exponent can already be rounded by JSON
+    # decoding before the library sees it.
     cost: Decimal | None = None
     if type(value) is str:
         if len(value) <= _COST_MAX_LENGTH and _COST.fullmatch(value) is not None:
