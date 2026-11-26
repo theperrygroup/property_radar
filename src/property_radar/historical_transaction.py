@@ -1,7 +1,8 @@
 """Versioned, bounded transaction quotes and results for API 5.3.1.0.
 
-This contract deliberately leaves the older transaction-history parser intact.
-It performs no I/O, authorization, retry, party matching, or date inference.
+Record values share the older transaction-history parser's scalar
+normalization; its contract stays separate. This module performs no I/O,
+authorization, retry, party matching, or date inference.
 """
 
 from __future__ import annotations
@@ -18,6 +19,20 @@ from decimal import Decimal
 from types import MappingProxyType
 from typing import Any, Literal, NoReturn, cast
 
+from ._record_scalars import (
+    RECORD_BOOLEAN_POLICY,
+    RECORD_ENUM_FIELDS,
+    RECORD_ENUM_POLICY,
+    RECORD_FLAG_FIELDS,
+    RECORD_INTEGER_POLICY,
+    RECORD_NULL_POLICY,
+    RECORD_NUMBER_POLICY,
+    RECORD_STRING_POLICY,
+    RECORD_VALUE_BASIS,
+    RECORD_VALUE_TYPES,
+    record_scalar_text,
+    record_value_omitted,
+)
 from .exceptions import InvalidResponseError
 
 HistoricalTransactionFilter = Literal["All", "CurrentOwner"]
@@ -84,6 +99,17 @@ _COST_REJECTED = (
     "over_64_characters",
     "other_types",
 )
+_RECORD_VALUE_REJECTED = (
+    "nan",
+    "infinity",
+    "negative_zero",
+    "over_64_characters",
+    "boolean_outside_flag_fields",
+    "number_in_enum_or_recording_date",
+    "object",
+    "array_outside_recording_date",
+    "other_types",
+)
 _DOC_TYPE = re.compile(r"[A-Z]{3}")
 _ENVELOPE_FIELDS = frozenset(
     ("results", "totalCost", "resultCount", "totalResultCount", "quantityFreeRemaining")
@@ -133,6 +159,17 @@ _CONTRACT_SOURCE: dict[str, object] = {
     "required_envelope_fields": tuple(sorted(_REQUIRED_FIELDS)),
     "record_fields_required_by_provider": (),
     "missing_record_fields": "preserved_as_unavailable",
+    "record_value_types": RECORD_VALUE_TYPES,
+    "record_value_string": RECORD_STRING_POLICY,
+    "record_value_null": RECORD_NULL_POLICY,
+    "record_value_boolean": RECORD_BOOLEAN_POLICY,
+    "record_value_boolean_fields": RECORD_FLAG_FIELDS,
+    "record_value_integer": RECORD_INTEGER_POLICY,
+    "record_value_number": RECORD_NUMBER_POLICY,
+    "record_value_enum_fields": RECORD_ENUM_FIELDS,
+    "record_value_enum": RECORD_ENUM_POLICY,
+    "record_value_rejected": _RECORD_VALUE_REJECTED,
+    "record_value_basis": RECORD_VALUE_BASIS,
     "duplicate_nonempty_document_ids": "reject",
     "returned_property_id": "must_match_query_when_present",
     "undocumented_envelope_and_record_fields": "reject",
@@ -141,6 +178,7 @@ _CONTRACT_SOURCE: dict[str, object] = {
     "recording_date_response_schema": "array_RelativeDate_ambiguous",
     "recording_date_scalar": "preserve_legacy_string_unverified",
     "recording_date_array": "preserve_string_tuple_never_convert",
+    "recording_date_null": "reject",
     "party_identity_linkage": None,
     "snapshot_before_validation": True,
     "automatic_retries": False,
@@ -264,7 +302,9 @@ class HistoricalTransactionQuery:
 class HistoricalTransactionRecord:
     """An immutable row with opaque displays and explicit date uncertainty.
 
-    Missing fields remain missing. A scalar recording date is preserved for
+    Missing fields remain missing. JSON numbers become exact decimal text, a
+    boolean in one of the three flag fields becomes ``"1"`` or ``"0"``, and a
+    null field stays missing. A scalar recording date is preserved for
     legacy compatibility but is not verified or parsed as a calendar date.
     A RelativeDate array is preserved separately, including an empty array.
     No party is associated with a buyer or current property owner.
@@ -273,23 +313,32 @@ class HistoricalTransactionRecord:
     fields: Mapping[HistoricalTransactionField, str | tuple[str, ...]]
 
     def __post_init__(self) -> None:
-        """Snapshot and validate row values without retaining caller containers."""
+        """Snapshot, normalize and validate row values.
+
+        Caller containers are never retained.
+        """
         row = _snapshot(self.fields, "record", allow_date_tuple=True)
         if set(row).difference(HISTORICAL_TRANSACTION_FIELDS):
             _invalid("undocumented_record_fields")
+        fields: dict[str, str | tuple[str, ...]] = {}
         for key, value in row.items():
             if key == "RecDate" and type(value) in (tuple, list):
                 values = tuple(cast(list[object] | tuple[object, ...], value))
                 if any(type(item) is not str for item in values):
                     _invalid("recording_date_array")
-                row[key] = values
-            elif type(value) is not str:
+                fields[key] = cast(tuple[str, ...], values)
+                continue
+            if record_value_omitted(key, value):
+                continue
+            text = record_scalar_text(key, value)
+            if text is None:
                 _invalid("record_field_type")
-        if "Status" in row and row["Status"] not in _STATUSES:
+            fields[key] = text
+        if "Status" in fields and fields["Status"] not in _STATUSES:
             _invalid("record_status")
-        if "DocGroup" in row and row["DocGroup"] not in _GROUPS:
+        if "DocGroup" in fields and fields["DocGroup"] not in _GROUPS:
             _invalid("record_doc_group")
-        object.__setattr__(self, "fields", MappingProxyType(row))
+        object.__setattr__(self, "fields", MappingProxyType(fields))
 
     def _text(self, field: HistoricalTransactionField) -> str | None:
         value = self.fields.get(field)
@@ -357,7 +406,10 @@ class HistoricalTransactionRecord:
 
     @property
     def amount(self) -> str | None:
-        """Preserve the provider's opaque amount display without money inference."""
+        """Preserve the provider's opaque amount display without money inference.
+
+        A JSON number amount arrives as its exact decimal text.
+        """
         return self._text("Amount")
 
     @property
