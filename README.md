@@ -15,17 +15,18 @@ An unofficial, typed Python client for the
 
 ## Status
 
-Version `0.4.2` fixes four response and request mismatches that live
-PropertyRadar responses showed in `0.4.1`. `totalCost` is accepted as a JSON
-integer, a finite JSON number or a decimal string. The bare `{"results": []}`
-envelope of a zero-hit preview is accepted. Preview counts follow the provider
-(`resultCount` counts purchased rows, `totalResultCount` counts matches).
-Buyer-transfer previews request only the free `RadarID` field and restrict the
-search to residential property types with the official `PropertyType`
-criterion. Paid buyer-transfer calls keep the `0.4.1` criteria and
-classification, and a record rejected after billing keeps its billing evidence.
-Transaction history reports withheld preview rows and owners and truncated
-responses. The four typed contracts get new fingerprints; see the changelog.
+Version `0.4.3` accepts the record values that live PropertyRadar
+historical-transaction rows send. Those rows send JSON numbers, and may send
+`null`, in record fields that the published spec declares as strings, and
+`0.4.2` rejected them with `record_field_type`. Both record parsers now give a
+JSON integer or a finite JSON number as its exact decimal text, a boolean in
+one of the three flag fields as `"1"` or `"0"`, and a `null` outside `RecDate`
+as a missing field, so record values stay text. A `null` `RecDate`, a
+boolean in any other field, a number in `Status`, `DocGroup` or `RecDate`,
+NaN, infinities, `-0.0` and numbers whose plain decimal form has more than 64
+characters, not counting the sign, still fail. Both transaction contracts get
+new fingerprints; see the changelog. The `0.4.2` `totalCost`, preview and
+buyer-transfer rules are unchanged.
 The base catalog covers all 37 operations in official API `5.2.0.0`; the
 historical Buyer-criterion property/location interface binds separate official
 API `5.3.1.0` evidence. The historical transaction interface separates preview

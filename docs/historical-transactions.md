@@ -1,15 +1,19 @@
 # Bounded historical transaction quotes and results
 
 `property_radar.historical_transaction` defines a separate contract for the
-reviewed PropertyRadar API **5.3.1.0**. It leaves the existing 0.2/0.3 transaction
-models, parsers, and fields unchanged. In 0.4.2 both transaction contracts
-record new response rules (a JSON-number `totalCost`, and for transaction
-history the preview `totalResultCount`, withheld rows, the computed
-`truncated` flag and withheld persons-preview owners), so
-`HISTORICAL_TRANSACTION_CONTRACT` and `TRANSACTION_HISTORY_CONTRACT` have new
-fingerprints. The module only validates
-inputs and parses supplied data; it makes no network calls and authorizes no
-charges.
+reviewed PropertyRadar API **5.3.1.0**. It leaves the existing 0.2/0.3
+transaction models and fields unchanged, and its contract stays separate from
+theirs. In 0.4.2 both transaction contracts record new response rules (a
+JSON-number `totalCost`, and for transaction history the preview
+`totalResultCount`, withheld rows, the computed `truncated` flag and withheld
+persons-preview owners). In 0.4.3 both record parsers share one record-value
+rule, which gives JSON numbers and flag booleans as text and a `null` outside
+`RecDate` as a missing field (see
+[Preserve record uncertainty](#preserve-record-uncertainty)), and both
+contracts record it. Each of these releases gives
+`HISTORICAL_TRANSACTION_CONTRACT` and `TRANSACTION_HISTORY_CONTRACT` new
+fingerprints. The module only validates inputs and parses supplied data; it
+makes no network calls and authorizes no charges.
 
 ## Query one bounded selection
 
@@ -163,6 +167,34 @@ structurally valid while lacking evidence needed for attribution. Duplicate
 nonempty document identifiers and returned property IDs that contradict the
 query are rejected.
 
+Record values in `fields` are text. PropertyRadar's published spec declares
+record fields such as `Amount` and `LTVorDown` as strings, but live rows send
+JSON numbers and may send booleans or `null`. After the undocumented-field
+check, each value other than a `RecDate` array is handled as follows:
+
+- A string is kept exactly.
+- A JSON integer whose absolute value has at most 64 digits becomes its
+  decimal text, so `250000` gives `"250000"` and `-5` gives `"-5"`.
+- A finite JSON number with a fraction or an exponent becomes the plain
+  decimal form of its shortest representation, without an exponent or
+  rounding: `80.0` gives `"80.0"`, `80.25` gives `"80.25"`, `1e16` gives
+  `"10000000000000000"` and `1e-7` gives `"0.0000001"`. That form may have at
+  most 64 characters, not counting the sign.
+- A boolean becomes `"1"` for `true` and `"0"` for `false`, but only in
+  `hasDocumentImage`, `isFirstCurrentOwnerRecord` and `isParentType`. The
+  library does not interpret flag text.
+- A `null` in any field other than `RecDate` leaves that field out of
+  `fields`. `missing_fields` then lists it, and a typed accessor for it
+  returns `None`, exactly as for an absent field.
+
+`Status` and `DocGroup` accept only a string or `null`, and their enum checks
+then apply. NaN, infinities, `-0.0`, an integer with more than 64 digits, a
+float whose plain form has more than 64 characters, a boolean in any other
+field, a number in `Status`, `DocGroup` or `RecDate`, objects, arrays outside
+`RecDate`, and all other types fail with `record_field_type`. The older
+`parse_transaction_history()` applies the same rule to its records, except
+that its `RecDate` must be a string.
+
 The current response schema describes `RecDate` as an array of RelativeDate
 filter expressions. No scalar response example was found in the reviewed
 current schema or endpoint documentation. The existing library's scalar
@@ -175,8 +207,9 @@ Accordingly:
   `ambiguous_array`; `recording_date` remains `None`. Even a one-element date-like
   array is never collapsed into a date. An empty array remains distinguishable
   from missing data.
-- An absent field has status `missing`. Nulls, nested arrays, and non-string
-  members fail validation.
+- An absent field has status `missing`. A `null` `RecDate` still fails
+  validation, although a `null` in any other field reads as missing. Numbers,
+  booleans, nested arrays, and non-string members fail validation too.
 
 `Grantor` and `Grantee` remain opaque displays. The parser does not split names,
 attach current owners, associate a buyer-search match with a document, select a

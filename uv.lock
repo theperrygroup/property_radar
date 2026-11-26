@@ -1158,7 +1158,7 @@ wheels = [
 
 [[package]]
 name = "property-radar"
-version = "0.4.2"
+version = "0.4.3"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },

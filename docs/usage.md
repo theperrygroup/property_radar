@@ -94,6 +94,19 @@ sources, billing policy, provider limitations, and a stable contract
 fingerprint. The history, records, current-owner parties, and billing evidence
 are frozen and detached from caller-owned mappings.
 
+Record values are text. The official contract declares the record fields as
+strings, but live rows can send JSON numbers. Since `0.4.3` the parser gives
+each value as exact text by the
+[record value rule](historical-transactions.md#preserve-record-uncertainty)
+that both record parsers share: `250000` gives `"250000"`, `80.25` gives
+`"80.25"`, and a boolean gives `"1"` or `"0"`, but only in
+`hasDocumentImage`, `isFirstCurrentOwnerRecord` and `isParentType`. A field
+sent as `null` is left out of `returned_fields` and its attribute is `None`,
+as for an absent field. `RecDate` must be a string; a `null`, a list or any
+other type there fails with `record_field_type`, and so do a number or a
+boolean in `Status`, NaN, infinities, `-0.0` and numbers whose plain decimal
+form has more than 64 characters, not counting the sign.
+
 The official contract defines `Grantor` and `Grantee` as scalar display
 strings. `grantor_display` and `grantee_display` preserve each whole value;
 `grantors` and `grantees` remain `None` because the provider does not expose
