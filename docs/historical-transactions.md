@@ -168,9 +168,9 @@ nonempty document identifiers and returned property IDs that contradict the
 query are rejected.
 
 Record values in `fields` are text. PropertyRadar's published spec declares
-these record fields as strings, but live rows send JSON numbers and may send
-booleans or `null`. After the undocumented-field check, each value is handled
-as follows:
+record fields such as `Amount` and `LTVorDown` as strings, but live rows send
+JSON numbers and may send booleans or `null`. After the undocumented-field
+check, each value other than a `RecDate` array is handled as follows:
 
 - A string is kept exactly.
 - A JSON integer whose absolute value has at most 64 digits becomes its
