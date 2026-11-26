@@ -92,7 +92,7 @@ jobs:
 
           assert len(manifest_operations()) == 37
           assert TRANSACTION_HISTORY_CONTRACT["contract_fingerprint"] == (
-              "a9bed508d5f9210dc37f5ce3e1d61061cb87fe0a3dd19e4c991266d6fb1fb635"
+              "311f0eb98e158fbbf5d6744fc7f5c9e73f45da2ca4762fc71d639e865fb8af25"
           )
           assert BUYER_TRANSFER_MATCH_CONTRACT["contract_fingerprint"] == (
               "580b955265f3f7928ea1bddba03e7244ceaff8f27fd6844343e05d6ae81bc01c"
@@ -122,7 +122,7 @@ jobs:
               purchase_requested=False,
           )
           assert buyer_match.matched
-          assert property_radar.__version__ == "0.4.2"
+          assert property_radar.__version__ == "0.4.3"
           historical = BuyerTransferMatchCriteria(
               buyer_name="Synthetic Buyer", radar_id="P-SYNTHETIC",
               state_code="UT", county_fips="49035", publication_window=None,
