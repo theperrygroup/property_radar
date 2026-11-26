@@ -370,15 +370,11 @@ def test_both_contracts_publish_the_shared_module_rule() -> None:
     assert historical["record_value_types"] == _record_scalars.RECORD_VALUE_TYPES
     assert historical["record_value_string"] == _record_scalars.RECORD_STRING_POLICY
     assert historical["record_value_null"] == _record_scalars.RECORD_NULL_POLICY
-    assert historical["record_value_boolean"] == (
-        _record_scalars.RECORD_BOOLEAN_POLICY
-    )
+    assert historical["record_value_boolean"] == _record_scalars.RECORD_BOOLEAN_POLICY
     assert historical["record_value_boolean_fields"] == (
         _record_scalars.RECORD_FLAG_FIELDS
     )
-    assert historical["record_value_integer"] == (
-        _record_scalars.RECORD_INTEGER_POLICY
-    )
+    assert historical["record_value_integer"] == _record_scalars.RECORD_INTEGER_POLICY
     assert historical["record_value_number"] == _record_scalars.RECORD_NUMBER_POLICY
     assert historical["record_value_enum_fields"] == (
         _record_scalars.RECORD_ENUM_FIELDS
@@ -440,7 +436,8 @@ def test_record_value_omitted_only_for_a_null_outside_the_recording_date(
 ) -> None:
     assert _record_scalars.record_value_omitted(field, None) is (field != "RecDate")
     assert _record_scalars.record_scalar_text(field, None) is None
-    for value in ("", "null", 0, 0.0, False, (), [], {}):
+    not_null: tuple[object, ...] = ("", "null", 0, 0.0, False, (), [], {})
+    for value in not_null:
         assert _record_scalars.record_value_omitted(field, value) is False
 
 
@@ -530,7 +527,9 @@ def test_historical_record_rejects_each_value_outside_the_rule_directly(
         Mapping[HistoricalTransactionField, str | tuple[str, ...]],
         {**HISTORICAL_ROW, field: value},
     )
-    with pytest.raises(InvalidResponseError, match=HISTORICAL_FIELD_TYPE_ERROR) as caught:
+    with pytest.raises(
+        InvalidResponseError, match=HISTORICAL_FIELD_TYPE_ERROR
+    ) as caught:
         HistoricalTransactionRecord(values)
     assert type(caught.value) is InvalidResponseError
     assert caught.value.__cause__ is None
@@ -603,10 +602,15 @@ def test_both_parsers_follow_the_shared_rule_for_every_shared_field(
     elif text is None:
         with pytest.raises(
             HistoricalTransactionResponseError, match=HISTORICAL_FIELD_TYPE_ERROR
-        ):
+        ) as historical_failure:
             historical_record(field, value)
-        with pytest.raises(InvalidResponseError, match=OLDER_FIELD_TYPE_ERROR):
+        with pytest.raises(
+            InvalidResponseError, match=OLDER_FIELD_TYPE_ERROR
+        ) as older_failure:
             older_record(field, value)
+        for failure in (historical_failure.value, older_failure.value):
+            assert failure.__cause__ is None
+            assert failure.__context__ is None
     else:
         historical_text = historical_fields(historical_record(field, value))[field]
         older_text = getattr(older_record(field, value), OLDER_ATTRIBUTES[field])
@@ -795,7 +799,7 @@ def test_paid_live_scalar_requests_are_never_retried(
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
         if len(requests) == 1:
-            return httpx.Response(503)
+            return httpx.Response(503, json={"message": "synthetic failure"})
         return json_response(WIRE_BODY)
 
     client, transport = make_client(handler, allow_charges=True)

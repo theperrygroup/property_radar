@@ -930,6 +930,28 @@ def test_records_reject_unknown_or_incompatible_shapes(
         parsed_result(results=[row(**changes), row(DocumentID="D-SYNTHETIC-2")])
 
 
+@pytest.mark.parametrize(
+    "changes",
+    [
+        pytest.param({"RecDate": None}, id="null-recording-date"),
+        pytest.param({"Amount": [123456]}, id="array-amount"),
+    ],
+)
+def test_kept_record_rejections_name_the_field_type_reason_without_chaining(
+    changes: dict[str, object],
+) -> None:
+    with pytest.raises(
+        HistoricalTransactionResponseError,
+        match=(
+            r"^PropertyRadar returned invalid historical transactions "
+            r"\(record_field_type\)\.$"
+        ),
+    ) as caught:
+        parsed_result(results=[row(**changes), row(DocumentID="D-SYNTHETIC-2")])
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+
+
 def test_records_keep_a_json_integer_amount_as_exact_text() -> None:
     # 0.4.3: live rows send Amount as a JSON integer, which stays exact text.
     result = parsed_result(
