@@ -12,6 +12,18 @@ from decimal import Decimal
 from types import MappingProxyType
 from typing import Literal, NoReturn, TypeVar, cast
 
+from ._record_scalars import (
+    RECORD_BOOLEAN_POLICY,
+    RECORD_ENUM_POLICY,
+    RECORD_FLAG_FIELDS,
+    RECORD_INTEGER_POLICY,
+    RECORD_NULL_POLICY,
+    RECORD_NUMBER_POLICY,
+    RECORD_STRING_POLICY,
+    RECORD_VALUE_BASIS,
+    record_scalar_text,
+    record_value_omitted,
+)
 from .exceptions import InvalidResponseError
 
 TransactionHistoryStatus = Literal["original", "edited", "deleted", "created"]
@@ -110,12 +122,34 @@ _TOTAL_COST_REJECTED = (
     "over_64_characters",
     "other_types",
 )
+_TRANSACTION_RECORD_VALUE_REJECTED = (
+    "nan",
+    "infinity",
+    "negative_zero",
+    "over_64_characters",
+    "boolean_outside_flag_fields",
+    "number_in_enum_or_recording_date",
+    "object",
+    "array",
+    "other_types",
+)
 _REQUEST_ID_MAX_LENGTH = 128
 _REQUEST_ID_PATTERN_SOURCE = r"[A-Za-z0-9]+-[A-Za-z0-9]+-[A-Za-z0-9]+"
 _REQUEST_ID_PATTERN = re.compile(_REQUEST_ID_PATTERN_SOURCE)
 
+# JSON types accepted per record field; fields not listed take the scalar types.
+_RECORD_SCALAR_TYPES = ("string", "integer", "number")
+_RECORD_FIELD_TYPES: dict[str, str | tuple[str, ...]] = {
+    "RecDate": "string",
+    "Status": "string",
+    **dict.fromkeys(RECORD_FLAG_FIELDS, ("string", "integer", "number", "boolean")),
+}
 _RECORD_FIELD_CONTRACT_SOURCE: dict[str, dict[str, object]] = {
-    field_name: {"type": "string", "nullable": False, "required": False}
+    field_name: {
+        "type": _RECORD_FIELD_TYPES.get(field_name, _RECORD_SCALAR_TYPES),
+        "nullable": field_name != "RecDate",
+        "required": False,
+    }
     for field_name in TRANSACTION_HISTORY_FIELDS
 }
 _ENVELOPE_FIELD_CONTRACT_SOURCE: dict[str, dict[str, object]] = {
@@ -299,6 +333,19 @@ _PARSER_POLICY_SOURCE: dict[str, object] = {
         "integer": "exact_int_minimum_0_maximum_64_digits",
         "number": "finite_float_minimum_0_decimal_repr_plain_form_matches_pattern",
         "rejected": _TOTAL_COST_REJECTED,
+    },
+    "record_scalars": {
+        "string": RECORD_STRING_POLICY,
+        "null": RECORD_NULL_POLICY,
+        "boolean": RECORD_BOOLEAN_POLICY,
+        "boolean_fields": RECORD_FLAG_FIELDS,
+        "integer": RECORD_INTEGER_POLICY,
+        "number": RECORD_NUMBER_POLICY,
+        "enum_fields": ("Status",),
+        "enum": RECORD_ENUM_POLICY,
+        "recording_date": "exact_str_only_null_rejected",
+        "rejected": _TRANSACTION_RECORD_VALUE_REJECTED,
+        "basis": RECORD_VALUE_BASIS,
     },
     "empty_display_string": None,
     "whitespace_display_string": "preserve",
@@ -951,11 +998,16 @@ def _parse_record(raw_record: Mapping[str, object]) -> TransactionHistoryRecord:
     record_keys = set(raw_record)
     if record_keys.difference(TRANSACTION_HISTORY_FIELDS):
         _raise_invalid("undocumented_record_fields")
-    for value in raw_record.values():
-        if type(value) is not str:
+    record: dict[str, str] = {}
+    for field_name, value in raw_record.items():
+        if record_value_omitted(field_name, value):
+            continue
+        text = record_scalar_text(field_name, value)
+        if text is None:
             _raise_invalid("record_field_type")
+        record[field_name] = text
 
-    status_value = _optional_text(raw_record, "Status")
+    status_value = _optional_text(record, "Status")
     if status_value is not None and status_value not in _TRANSACTION_HISTORY_STATUSES:
         _raise_invalid("status_enum")
 
@@ -963,27 +1015,27 @@ def _parse_record(raw_record: Mapping[str, object]) -> TransactionHistoryRecord:
         returned_fields=tuple(
             field_name
             for field_name in TRANSACTION_HISTORY_FIELDS
-            if field_name in raw_record
+            if field_name in record
         ),
-        document_type_ui=_optional_text(raw_record, "DocTypeUI"),
+        document_type_ui=_optional_text(record, "DocTypeUI"),
         status=cast(TransactionHistoryStatus | None, status_value),
-        purpose=_optional_text(raw_record, "Purpose"),
-        loan_position=_optional_text(raw_record, "LoanPosition"),
-        document_number=_optional_text(raw_record, "DocNumber"),
-        recording_date=_optional_text(raw_record, "RecDate"),
-        grantor_display=_optional_display(raw_record, "Grantor"),
-        grantee_display=_optional_display(raw_record, "Grantee"),
+        purpose=_optional_text(record, "Purpose"),
+        loan_position=_optional_text(record, "LoanPosition"),
+        document_number=_optional_text(record, "DocNumber"),
+        recording_date=_optional_text(record, "RecDate"),
+        grantor_display=_optional_display(record, "Grantor"),
+        grantee_display=_optional_display(record, "Grantee"),
         grantors=None,
         grantees=None,
-        amount=_optional_text(raw_record, "Amount"),
-        ltv_or_down=_optional_text(raw_record, "LTVorDown"),
-        has_document_image=_optional_text(raw_record, "hasDocumentImage"),
+        amount=_optional_text(record, "Amount"),
+        ltv_or_down=_optional_text(record, "LTVorDown"),
+        has_document_image=_optional_text(record, "hasDocumentImage"),
         is_first_current_owner_record=_optional_text(
-            raw_record,
+            record,
             "isFirstCurrentOwnerRecord",
         ),
-        is_parent_type=_optional_text(raw_record, "isParentType"),
-        document_id=_optional_text(raw_record, "DocumentID"),
+        is_parent_type=_optional_text(record, "isParentType"),
+        document_id=_optional_text(record, "DocumentID"),
     )
 
 
