@@ -233,6 +233,35 @@ TRANSACTION_HISTORY_CONTRACT_FINGERPRINT_0_4_2_BEFORE_REVIEW = (
     # pragma: allowlist nextline secret
     "db0dd03413f298367f79749e522bd3e454e295cafcc68e7dd6d077085254e707"
 )
+# 0.4.3 keeps the JSON numbers, booleans and nulls of live rows in both parsers,
+# so both transaction contract fingerprints move again.
+HISTORICAL_TRANSACTION_CONTRACT_FINGERPRINT_0_4_3 = (
+    # pragma: allowlist nextline secret
+    "ded1967cb0fb24dcbcfc84b62ae8117216deccf89a85a72a1ff6ab9355f3f2b9"
+)
+TRANSACTION_HISTORY_CONTRACT_FINGERPRINT_0_4_3 = (
+    # pragma: allowlist nextline secret
+    "311f0eb98e158fbbf5d6744fc7f5c9e73f45da2ca4762fc71d639e865fb8af25"
+)
+RECORD_NUMBER_POLICY = (
+    "finite_float_decimal_repr_plain_form_absolute_value_maximum_64_characters_signed"
+)
+RECORD_VALUE_BASIS = (
+    "spec_declares_strings_live_integers_observed_floats_booleans_nulls_tolerated"
+)
+RECORD_VALUE_KEYS = (
+    "record_value_types",
+    "record_value_string",
+    "record_value_null",
+    "record_value_boolean",
+    "record_value_boolean_fields",
+    "record_value_integer",
+    "record_value_number",
+    "record_value_enum_fields",
+    "record_value_enum",
+    "record_value_rejected",
+    "record_value_basis",
+)
 
 
 def test_contract_has_current_provenance_and_distinct_stable_fingerprint() -> None:
@@ -270,14 +299,57 @@ def test_contract_has_current_provenance_and_distinct_stable_fingerprint() -> No
         "over_64_characters",
         "other_types",
     )
+    assert contract["missing_record_fields"] == "preserved_as_unavailable"
+    assert contract["record_value_types"] == (
+        "string",
+        "integer",
+        "number",
+        "boolean",
+        "null",
+    )
+    assert contract["record_value_string"] == "exact_str_preserved"
+    assert contract["record_value_null"] == "omitted_preserved_as_unavailable"
+    assert contract["record_value_boolean"] == "flag_fields_only_true_1_false_0"
+    assert contract["record_value_boolean_fields"] == (
+        "hasDocumentImage",
+        "isFirstCurrentOwnerRecord",
+        "isParentType",
+    )
+    assert contract["record_value_integer"] == (
+        "exact_int_absolute_value_maximum_64_digits_signed_decimal_text"
+    )
+    assert contract["record_value_number"] == RECORD_NUMBER_POLICY
+    assert contract["record_value_enum_fields"] == ("Status", "DocGroup")
+    assert contract["record_value_enum"] == "exact_str_or_null_only"
+    assert contract["record_value_rejected"] == (
+        "nan",
+        "infinity",
+        "negative_zero",
+        "over_64_characters",
+        "boolean_outside_flag_fields",
+        "number_in_enum_or_recording_date",
+        "object",
+        "array_outside_recording_date",
+        "other_types",
+    )
+    assert contract["record_value_basis"] == RECORD_VALUE_BASIS
+    assert contract["recording_date_array"] == "preserve_string_tuple_never_convert"
+    assert contract["recording_date_null"] == "reject"
+    keys = tuple(contract)
+    start = keys.index("missing_record_fields") + 1
+    assert keys[start : start + len(RECORD_VALUE_KEYS)] == RECORD_VALUE_KEYS
+    assert keys[keys.index("recording_date_array") + 1] == "recording_date_null"
     source = dict(contract)
     fingerprint = source.pop("contract_fingerprint")
     encoded = json.dumps(
         source, sort_keys=True, separators=(",", ":"), ensure_ascii=True
     ).encode("ascii")
     assert fingerprint == hashlib.sha256(encoded).hexdigest()
-    assert fingerprint == HISTORICAL_TRANSACTION_CONTRACT_FINGERPRINT_0_4_2
-    assert fingerprint != HISTORICAL_TRANSACTION_CONTRACT_FINGERPRINT_0_4_1
+    assert fingerprint == HISTORICAL_TRANSACTION_CONTRACT_FINGERPRINT_0_4_3
+    assert fingerprint not in {
+        HISTORICAL_TRANSACTION_CONTRACT_FINGERPRINT_0_4_1,
+        HISTORICAL_TRANSACTION_CONTRACT_FINGERPRINT_0_4_2,
+    }
     assert fingerprint != TRANSACTION_HISTORY_CONTRACT["contract_fingerprint"]
     assert fingerprint != BUYER_TRANSFER_MATCH_CONTRACT["contract_fingerprint"]
     with pytest.raises(TypeError):
@@ -615,7 +687,7 @@ def test_json_decoded_costs_parse_as_decoded_without_a_new_rejection(
         assert parsed.total_cost == expected
         assert parsed.total_cost.as_tuple() == expected.as_tuple()
     assert HISTORICAL_TRANSACTION_CONTRACT["contract_fingerprint"] == (
-        HISTORICAL_TRANSACTION_CONTRACT_FINGERPRINT_0_4_2
+        HISTORICAL_TRANSACTION_CONTRACT_FINGERPRINT_0_4_3
     )
 
 
@@ -846,7 +918,7 @@ def test_wire_recording_dates_require_json_arrays_but_model_accepts_frozen_tuple
         {"RecDate": [["2020-06-12"]]},
         {"RecDate": [StringSubclass("2020-06-12")]},
         {"RecDate": HostileList(["Today"])},
-        {"Amount": 123456},
+        {"Amount": [123456]},
         {"Grantor": ["Synthetic", "Party"]},
         {"DocumentID": StringSubclass("D-SYNTHETIC")},
     ],
@@ -856,6 +928,18 @@ def test_records_reject_unknown_or_incompatible_shapes(
 ) -> None:
     with pytest.raises(InvalidResponseError):
         parsed_result(results=[row(**changes), row(DocumentID="D-SYNTHETIC-2")])
+
+
+def test_records_keep_a_json_integer_amount_as_exact_text() -> None:
+    # 0.4.3: live rows send Amount as a JSON integer, which stays exact text.
+    result = parsed_result(
+        results=[row(Amount=123456), row(DocumentID="D-SYNTHETIC-2")]
+    )
+    record = result.records[0]
+    assert type(record.amount) is str
+    assert record.amount == "123456"
+    assert record.fields["Amount"] == "123456"
+    assert "Amount" not in record.missing_fields
 
 
 @pytest.mark.parametrize(
@@ -984,13 +1068,14 @@ def test_direct_paid_construction_requires_immutable_complete_typed_records(
         replace(parsed_result(), records=records)  # type: ignore[arg-type]
 
 
-def test_legacy_contract_moves_to_0_4_2_and_buyer_stays_distinct() -> None:
+def test_legacy_contract_moves_to_0_4_3_and_buyer_stays_distinct() -> None:
     assert TRANSACTION_HISTORY_CONTRACT["api_version"] == "5.2.0.0"
     transaction_fingerprint = TRANSACTION_HISTORY_CONTRACT["contract_fingerprint"]
-    assert transaction_fingerprint == TRANSACTION_HISTORY_CONTRACT_FINGERPRINT_0_4_2
+    assert transaction_fingerprint == TRANSACTION_HISTORY_CONTRACT_FINGERPRINT_0_4_3
     assert transaction_fingerprint not in {
         TRANSACTION_HISTORY_CONTRACT_FINGERPRINT_0_4_1,
         TRANSACTION_HISTORY_CONTRACT_FINGERPRINT_0_4_2_BEFORE_REVIEW,
+        TRANSACTION_HISTORY_CONTRACT_FINGERPRINT_0_4_2,
     }
     # The exact buyer pin lives in the buyer-transfer test files; this file
     # checks only the shape and that the buyer contract stays distinct.
@@ -1002,7 +1087,9 @@ def test_legacy_contract_moves_to_0_4_2_and_buyer_stays_distinct() -> None:
         HISTORICAL_TRANSACTION_CONTRACT["contract_fingerprint"],
         TRANSACTION_HISTORY_CONTRACT_FINGERPRINT_0_4_1,
         TRANSACTION_HISTORY_CONTRACT_FINGERPRINT_0_4_2_BEFORE_REVIEW,
+        TRANSACTION_HISTORY_CONTRACT_FINGERPRINT_0_4_2,
         HISTORICAL_TRANSACTION_CONTRACT_FINGERPRINT_0_4_1,
+        HISTORICAL_TRANSACTION_CONTRACT_FINGERPRINT_0_4_2,
     }
     legacy = parse_transaction_history(
         {"results": [{"RecDate": "2020-06-12"}], "resultCount": 1, "totalCost": "0.25"},

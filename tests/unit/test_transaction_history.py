@@ -263,6 +263,46 @@ TRANSACTION_HISTORY_CONTRACT_FINGERPRINT_0_4_2_BEFORE_REVIEW = (
     # pragma: allowlist nextline secret
     "db0dd03413f298367f79749e522bd3e454e295cafcc68e7dd6d077085254e707"
 )
+# 0.4.3 keeps the JSON numbers, booleans and nulls of live rows (record_fields
+# and parser_policy record_scalars), so the contract fingerprint moves again.
+TRANSACTION_HISTORY_CONTRACT_FINGERPRINT_0_4_3 = (
+    # pragma: allowlist nextline secret
+    "311f0eb98e158fbbf5d6744fc7f5c9e73f45da2ca4762fc71d639e865fb8af25"
+)
+RECORD_FLAG_FIELDS = ("hasDocumentImage", "isFirstCurrentOwnerRecord", "isParentType")
+RECORD_NUMBER_POLICY = (
+    "finite_float_decimal_repr_plain_form_absolute_value_maximum_64_characters_signed"
+)
+RECORD_VALUE_BASIS = (
+    "spec_declares_strings_live_integers_observed_floats_booleans_nulls_tolerated"
+)
+RECORD_SCALAR_REJECTED_CLASSES = (
+    "nan",
+    "infinity",
+    "negative_zero",
+    "over_64_characters",
+    "boolean_outside_flag_fields",
+    "number_in_enum_or_recording_date",
+    "object",
+    "array",
+    "other_types",
+)
+RECORD_ATTRIBUTES = {
+    "DocTypeUI": "document_type_ui",
+    "Status": "status",
+    "Purpose": "purpose",
+    "LoanPosition": "loan_position",
+    "DocNumber": "document_number",
+    "RecDate": "recording_date",
+    "Grantor": "grantor_display",
+    "Grantee": "grantee_display",
+    "Amount": "amount",
+    "LTVorDown": "ltv_or_down",
+    "hasDocumentImage": "has_document_image",
+    "isFirstCurrentOwnerRecord": "is_first_current_owner_record",
+    "isParentType": "is_parent_type",
+    "DocumentID": "document_id",
+}
 TOTAL_COST_PROVIDER_TYPES = ("integer", "number", "string")
 TOTAL_COST_REJECTED_CLASSES = (
     "boolean",
@@ -595,8 +635,69 @@ def test_contract_is_current_deeply_immutable_and_fingerprinted() -> None:
             "required": False,
         },
     }
+    text_or_number = {
+        "type": ("string", "integer", "number"),
+        "nullable": True,
+        "required": False,
+    }
+    flag = {
+        "type": ("string", "integer", "number", "boolean"),
+        "nullable": True,
+        "required": False,
+    }
+    record_fields = cast(
+        Mapping[str, object], TRANSACTION_HISTORY_CONTRACT["record_fields"]
+    )
+    assert record_fields == {
+        "DocTypeUI": text_or_number,
+        "Status": {"type": "string", "nullable": True, "required": False},
+        "Purpose": text_or_number,
+        "LoanPosition": text_or_number,
+        "DocNumber": text_or_number,
+        "RecDate": {"type": "string", "nullable": False, "required": False},
+        "Grantor": text_or_number,
+        "Grantee": text_or_number,
+        "Amount": text_or_number,
+        "LTVorDown": text_or_number,
+        "hasDocumentImage": flag,
+        "isFirstCurrentOwnerRecord": flag,
+        "isParentType": flag,
+        "DocumentID": text_or_number,
+    }
+    assert tuple(record_fields) == EXPECTED_TRANSACTION_HISTORY_FIELDS
     parser_policy = cast(
         Mapping[str, object], TRANSACTION_HISTORY_CONTRACT["parser_policy"]
+    )
+    assert parser_policy["exact_json_primitive_types"] is True
+    assert parser_policy["record_scalars"] == {
+        "string": "exact_str_preserved",
+        "null": "omitted_preserved_as_unavailable",
+        "boolean": "flag_fields_only_true_1_false_0",
+        "boolean_fields": RECORD_FLAG_FIELDS,
+        "integer": "exact_int_absolute_value_maximum_64_digits_signed_decimal_text",
+        "number": RECORD_NUMBER_POLICY,
+        "enum_fields": ("Status",),
+        "enum": "exact_str_or_null_only",
+        "recording_date": "exact_str_only_null_rejected",
+        "rejected": RECORD_SCALAR_REJECTED_CLASSES,
+        "basis": RECORD_VALUE_BASIS,
+    }
+    assert tuple(cast(Mapping[str, object], parser_policy["record_scalars"])) == (
+        "string",
+        "null",
+        "boolean",
+        "boolean_fields",
+        "integer",
+        "number",
+        "enum_fields",
+        "enum",
+        "recording_date",
+        "rejected",
+        "basis",
+    )
+    policy_keys = tuple(parser_policy)
+    assert policy_keys.index("record_scalars") + 1 == policy_keys.index(
+        "empty_display_string"
     )
     assert parser_policy["required_envelope_fields"] == (
         "results",
@@ -624,6 +725,7 @@ def test_contract_is_current_deeply_immutable_and_fingerprinted() -> None:
         "property_persons",
         "quantity_free_remaining",
         "total_cost",
+        "record_scalars",
         "empty_display_string",
         "whitespace_display_string",
         "heuristic_name_splitting",
@@ -701,11 +803,12 @@ def test_contract_is_current_deeply_immutable_and_fingerprinted() -> None:
         == (TRANSACTION_HISTORY_CONTRACT["contract_fingerprint"])
     )
     assert TRANSACTION_HISTORY_CONTRACT["contract_fingerprint"] == (
-        TRANSACTION_HISTORY_CONTRACT_FINGERPRINT_0_4_2
+        TRANSACTION_HISTORY_CONTRACT_FINGERPRINT_0_4_3
     )
     assert TRANSACTION_HISTORY_CONTRACT["contract_fingerprint"] not in {
         TRANSACTION_HISTORY_CONTRACT_FINGERPRINT_0_4_1,
         TRANSACTION_HISTORY_CONTRACT_FINGERPRINT_0_4_2_BEFORE_REVIEW,
+        TRANSACTION_HISTORY_CONTRACT_FINGERPRINT_0_4_2,
     }
     assert_deeply_immutable(TRANSACTION_HISTORY_CONTRACT)
 
@@ -1419,12 +1522,43 @@ def test_malformed_transaction_shapes_fail_closed(
     assert "SYNTHETIC" not in str(failure.value)
 
 
-@pytest.mark.parametrize("field_name", EXPECTED_TRANSACTION_HISTORY_FIELDS)
-def test_every_official_record_field_rejects_null(field_name: str) -> None:
+@pytest.mark.parametrize(
+    "field_name",
+    [
+        pytest.param(field_name, id=field_name)
+        for field_name in EXPECTED_TRANSACTION_HISTORY_FIELDS
+        if field_name != "RecDate"
+    ],
+)
+def test_every_official_record_field_but_the_recording_date_omits_null(
+    field_name: str,
+) -> None:
     envelope = synthetic_envelope()
     cast(list[dict[str, object]], envelope["results"])[0][field_name] = None
-    with pytest.raises(InvalidResponseError, match=r"\(record_field_type\)"):
+    (record,) = parse_transaction_history(envelope).records
+    assert record.returned_fields == tuple(
+        name for name in EXPECTED_TRANSACTION_HISTORY_FIELDS if name != field_name
+    )
+    assert getattr(record, RECORD_ATTRIBUTES[field_name]) is None
+    for name in record.returned_fields:
+        assert type(getattr(record, RECORD_ATTRIBUTES[name])) is str
+
+
+def test_the_recording_date_still_rejects_null() -> None:
+    envelope = synthetic_envelope()
+    cast(list[dict[str, object]], envelope["results"])[0]["RecDate"] = None
+    with pytest.raises(
+        InvalidResponseError, match=invalid_history("record_field_type")
+    ) as failure:
         parse_transaction_history(envelope)
+    assert failure.value.__cause__ is None
+    assert failure.value.__context__ is None
+
+
+def test_record_attribute_map_covers_every_official_field() -> None:
+    assert tuple(RECORD_ATTRIBUTES) == EXPECTED_TRANSACTION_HISTORY_FIELDS
+    record_fields = {field.name for field in fields(TransactionHistoryRecord)}
+    assert set(RECORD_ATTRIBUTES.values()) <= record_fields
 
 
 @pytest.mark.parametrize(
