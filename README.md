@@ -22,9 +22,10 @@ historical-transaction rows send. Those rows send JSON numbers, and may send
 JSON integer or a finite JSON number as its exact decimal text, a boolean in
 one of the three flag fields as `"1"` or `"0"`, and a `null` outside `RecDate`
 as a missing field, so record values stay text. A `null` `RecDate`, a
-boolean in any other field, NaN, infinities, `-0.0` and numbers of more than
-64 characters, not counting the sign, still fail. Both transaction contracts
-get new fingerprints; see the changelog. The `0.4.2` `totalCost`, preview and
+boolean in any other field, a number in `Status`, `DocGroup` or `RecDate`,
+NaN, infinities, `-0.0` and numbers whose plain decimal form has more than 64
+characters, not counting the sign, still fail. Both transaction contracts get
+new fingerprints; see the changelog. The `0.4.2` `totalCost`, preview and
 buyer-transfer rules are unchanged.
 The base catalog covers all 37 operations in official API `5.2.0.0`; the
 historical Buyer-criterion property/location interface binds separate official

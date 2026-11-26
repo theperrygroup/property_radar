@@ -14,8 +14,9 @@ Live PropertyRadar `5.3.1.0` historical-transaction rows send JSON numbers,
 and may send `null`, in record fields that the published spec declares as
 strings. `0.4.2` rejected such rows with `record_field_type`, so a paid call
 that returned one failed after the charge. `0.4.3` accepts these values in
-both record parsers and gives each one as exact text. The tests use
-synthetic values only and make no provider request.
+both record parsers: a number becomes its exact text, and a `null` outside
+`RecDate` reads as a missing field. The tests use synthetic values only and
+make no provider request.
 
 ### Fixed
 

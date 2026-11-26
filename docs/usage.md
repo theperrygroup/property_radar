@@ -104,8 +104,8 @@ that both record parsers share: `250000` gives `"250000"`, `80.25` gives
 sent as `null` is left out of `returned_fields` and its attribute is `None`,
 as for an absent field. `RecDate` must be a string; a `null`, a list or any
 other type there fails with `record_field_type`, and so do a number or a
-boolean in `Status`, NaN, infinities, `-0.0` and numbers of more than 64
-characters, not counting the sign.
+boolean in `Status`, NaN, infinities, `-0.0` and numbers whose plain decimal
+form has more than 64 characters, not counting the sign.
 
 The official contract defines `Grantor` and `Grantee` as scalar display
 strings. `grantor_display` and `grantee_display` preserve each whole value;
