@@ -8,6 +8,99 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-11-26
+
+Live PropertyRadar `5.3.1.0` historical-transaction rows send JSON numbers,
+and may send `null`, in record fields that the published spec declares as
+strings. `0.4.2` rejected such rows with `record_field_type`, so a paid call
+that returned one failed after the charge. `0.4.3` accepts these values in
+both record parsers and gives each one as exact text. The tests use
+synthetic values only and make no provider request.
+
+### Fixed
+
+- Record values. `HistoricalTransactionRecord`, which
+  `parse_historical_transaction_result` and
+  `properties.historical_transaction_history(purchase=True)` use, and
+  `parse_transaction_history`, which `properties.transaction_history()` uses,
+  now apply one rule to each documented record field:
+  - A string is kept exactly, with no length bound.
+  - A JSON integer whose absolute value has at most 64 digits becomes its
+    decimal text: `250000` gives `"250000"` and `-5` gives `"-5"`.
+  - A JSON number with a fraction or an exponent reaches the parser as a
+    float. A finite float becomes the plain decimal form of its shortest
+    representation, without an exponent and without rounding: `80.0` gives
+    `"80.0"`, `80.25` gives `"80.25"`, `1e16` gives `"10000000000000000"`,
+    `1e-7` gives `"0.0000001"` and `-1.5` gives `"-1.5"`. That form may have
+    at most 64 characters, not counting the sign. When the number as written
+    has at most 15 significant digits, the text has its value; a longer
+    number can already be rounded by JSON decoding before the library sees
+    it.
+  - A boolean becomes `"1"` (`true`) or `"0"` (`false`), but only in the
+    flag fields `hasDocumentImage`, `isFirstCurrentOwnerRecord` and
+    `isParentType`.
+  - `null` in any field other than `RecDate` leaves the field out of the
+    record, so it reads as missing, exactly like an absent field:
+    `HistoricalTransactionRecord.missing_fields` lists it, and
+    `TransactionHistoryRecord.returned_fields` leaves it out and its
+    attribute is `None`.
+- Every other value still fails with `record_field_type`: NaN, infinities,
+  `-0.0`, an integer with more than 64 digits, a float whose plain decimal
+  form has more than 64 characters (`1e64`, `1e-63` and `5e-324` fail), a
+  boolean outside the three flag fields, a number or a boolean in `Status`,
+  `DocGroup` or `RecDate`, a `null` `RecDate`, an object, an array outside
+  the historical `RecDate`, `Decimal`, subclasses of `str`, `int` and
+  `float`, and all other types. Because booleans are limited to the flag
+  fields, a boolean `Amount` cannot become a transfer value of `"1"` or
+  `"0"`.
+- `RecDate` keeps its `0.4.2` rules. The historical parser keeps a string,
+  keeps a list or tuple of strings as a tuple, and fails with
+  `recording_date_array` for an array with any other member. The older
+  parser accepts only a string.
+- The checks around the value rule are unchanged. The undocumented-field
+  check still runs first, so a `null` under an undocumented key still fails
+  with `undocumented_record_fields`. The `Status` and `DocGroup` enum checks
+  (`record_status`, `record_doc_group` and `status_enum`) run after the
+  value rule, and the error messages and reason codes are the same. A
+  historical record that fails is still rejected inside
+  `parse_historical_transaction_result`, so its
+  `HistoricalTransactionResponseError` keeps the billing evidence.
+
+### Changed
+
+- Both transaction contracts record the value rule.
+  `HISTORICAL_TRANSACTION_CONTRACT` adds eleven `record_value_*` keys after
+  `missing_record_fields` and `recording_date_null` after
+  `recording_date_array`, and changes no existing key or value.
+  `TRANSACTION_HISTORY_CONTRACT` lists the accepted JSON types of each record
+  field, marks every record field except `RecDate` as nullable, and adds the
+  `record_scalars` parser policy. Their contract fingerprints change from
+  `0.4.2` to `0.4.3`:
+  - `HISTORICAL_TRANSACTION_CONTRACT` (version `1.1`):
+    `33a65caa400236c89f19a8cabd6e36132ee86dc2224b44cbb6af2b0fec71f183` to
+    `ded1967cb0fb24dcbcfc84b62ae8117216deccf89a85a72a1ff6ab9355f3f2b9`.
+    `HistoricalTransactionQuery.scope_fingerprint` values change with it.
+  - `TRANSACTION_HISTORY_CONTRACT`:
+    `a9bed508d5f9210dc37f5ce3e1d61061cb87fe0a3dd19e4c991266d6fb1fb635` to
+    `311f0eb98e158fbbf5d6744fc7f5c9e73f45da2ca4762fc71d639e865fb8af25`.
+
+  `BUYER_TRANSFER_MATCH_CONTRACT` and
+  `BUYER_TRANSFER_HISTORICAL_MATCH_CONTRACT` keep their `0.4.2` fingerprints.
+
+  Callers that pin a contract fingerprint must update it.
+
+### Clarified
+
+- The library does not interpret flag text. `"1"` and `"0"` are its text for
+  a JSON boolean, and a string or a number in a flag field becomes text by
+  the rules above. PropertyRadar still documents no truth encoding for
+  `isFirstCurrentOwnerRecord`.
+- Compatibility. No public name, parameter, dataclass field or
+  invalid-response reason is added, removed or renamed. Record values stay a
+  `str`, or a tuple of `str` for the historical `RecDate`, so every typed
+  accessor keeps its type. A paid call still requires `purchase=True` and the
+  client opt-in `allow_charges=True`, and is never retried.
+
 ## [0.4.2] - 2026-11-23
 
 Live PropertyRadar responses showed four mismatches in `0.4.1`. This release
@@ -347,7 +440,8 @@ The tag and artifacts were created, but the older publisher rejected metadata
 - Python 3.10 through 3.14 CI, CodeQL, GitHub Pages, Dependabot, and
   trusted-publishing release workflows.
 
-[Unreleased]: https://github.com/theperrygroup/property_radar/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/theperrygroup/property_radar/compare/v0.4.3...HEAD
+[0.4.3]: https://github.com/theperrygroup/property_radar/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/theperrygroup/property_radar/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/theperrygroup/property_radar/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/theperrygroup/property_radar/compare/v0.3.0...v0.4.0
